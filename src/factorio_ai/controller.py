@@ -19,6 +19,7 @@ from .models import (
 from .planner import (
     AutomationScienceSkill,
     BeltSmeltingLineSkill,
+    CircuitAutomationSkill,
     CopperPlateSkill,
     ElectronicCircuitSkill,
     IronPlateSkill,
@@ -217,6 +218,22 @@ class FactorioController:
             log_path=log_path,
         )
 
+    def run_circuit_automation_mvp(
+        self,
+        target: int = 5,
+        max_steps: int = 1800,
+        log_path: Path | None = None,
+    ) -> RunSummary:
+        return self._run_skill(
+            skill=CircuitAutomationSkill(target),
+            target_item="electronic-circuit",
+            target=target,
+            goal="automate_electronic_circuit_line",
+            max_steps=max_steps,
+            log_prefix="circuit-automation-mvp",
+            log_path=log_path,
+        )
+
     def strategy_decision(self, objective: str, require_llm: bool = False) -> dict[str, Any]:
         observation = self.observe()
         production_targets = load_targets(self.cfg.runtime_dir, objective).per_minute
@@ -363,6 +380,16 @@ class FactorioController:
                 "goal": skill_name,
                 "max_steps": max_steps or 1500,
                 "log_prefix": "strategy-automation-research",
+            }
+        if skill_name == "automate_electronic_circuit_line":
+            target = target_count or 5
+            return {
+                "skill": CircuitAutomationSkill(target),
+                "target_item": "electronic-circuit",
+                "target": target,
+                "goal": skill_name,
+                "max_steps": max_steps or 1800,
+                "log_prefix": "strategy-circuit-automation",
             }
         return None
 

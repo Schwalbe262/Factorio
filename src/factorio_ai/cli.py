@@ -96,6 +96,13 @@ def main(argv: list[str] | None = None) -> None:
     )
     automation_research_parser.add_argument("--max-steps", type=int, default=1500)
 
+    circuit_automation_parser = subparsers.add_parser(
+        "run-circuit-automation-mvp",
+        help="Build a powered assembler cell for electronic circuits",
+    )
+    circuit_automation_parser.add_argument("--target", type=int, default=5)
+    circuit_automation_parser.add_argument("--max-steps", type=int, default=1800)
+
     subparsers.add_parser("slurm-deploy", help="Deploy project source to the Slurm remote directory")
     subparsers.add_parser("slurm-start-worker", help="Submit the persistent Slurm worker job")
     subparsers.add_parser("slurm-status", help="Print Slurm worker status")
@@ -301,6 +308,21 @@ def main(argv: list[str] | None = None) -> None:
                 "reason": summary.reason,
                 "steps": summary.steps,
                 "automationSciencePackCount": summary.item_count,
+                "logPath": str(summary.log_path),
+            }
+        )
+        if not summary.ok:
+            raise SystemExit(1)
+        return
+
+    if args.command == "run-circuit-automation-mvp":
+        summary = FactorioController(cfg).run_circuit_automation_mvp(target=args.target, max_steps=args.max_steps)
+        print_json(
+            {
+                "ok": summary.ok,
+                "reason": summary.reason,
+                "steps": summary.steps,
+                "electronicCircuitCount": summary.item_count,
                 "logPath": str(summary.log_path),
             }
         )

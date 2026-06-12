@@ -1290,6 +1290,288 @@ class ResearchAutomationSkill:
         return self.power_skill._ensure_item_quantity(observation, player, item, quantity)
 
 
+class CircuitAutomationSkill:
+    """Build a minimal powered assembler cell that makes green circuits."""
+
+    def __init__(self, target_count: int = 5) -> None:
+        self.target_count = target_count
+        self.power_skill = SetupPowerSkill()
+        self.research_skill = ResearchAutomationSkill()
+        self.hand_circuit_skill = ElectronicCircuitSkill(target_count=max(7, target_count))
+        self.iron_skill = IronPlateSkill(target_count=40)
+        self.copper_skill = CopperPlateSkill(target_count=20)
+
+    def next_action(self, observation: dict[str, Any]) -> PlannerDecision:
+        player = player_position(observation)
+        if not bool(_technology_state(observation, "automation").get("researched")):
+            decision = self.research_skill.next_action(observation)
+            if decision.done:
+                return PlannerDecision({"type": "wait", "ticks": 120}, "wait for automation unlock observation to settle")
+            return decision
+
+        power_block = _find_steam_power_block(observation)
+        if not _steam_power_ready(power_block):
+            decision = self.power_skill.next_action(observation)
+            if decision.done:
+                return PlannerDecision({"type": "wait", "ticks": 120}, "wait for power observation to settle")
+            return decision
+
+        line = _find_circuit_automation_cell(observation) or _select_circuit_automation_site(observation)
+        if line is None:
+            return PlannerDecision(None, "cannot find a powered or wireable site for the first circuit assembler cell")
+
+        missing_item = _missing_circuit_cell_item(observation, line)
+        if missing_item:
+            decision = self._ensure_item_quantity(observation, player, missing_item, _circuit_cell_required_count(line, missing_item))
+            if decision is not None:
+                return decision
+
+        if not line.get("pole_unit_number"):
+            pole_position = line["pole_position"]
+            if distance(player, pole_position) > 20:
+                return PlannerDecision(
+                    {"type": "move_to", "position": _stand_position(pole_position)},
+                    "move near planned circuit automation pole",
+                )
+            return PlannerDecision(
+                {
+                    "type": "build",
+                    "name": "small-electric-pole",
+                    "position": pole_position,
+                },
+                "extend power for circuit automation cell",
+            )
+
+        build_order = [
+            ("cable_assembler", "assembling-machine-1", "cable_assembler_position"),
+            ("circuit_assembler", "assembling-machine-1", "circuit_assembler_position"),
+            ("transfer_inserter", "inserter", "transfer_inserter_position"),
+        ]
+        for key, name, position_key in build_order:
+            if line.get(key) is not None:
+                continue
+            position = line[position_key]
+            if distance(player, position) > 20:
+                return PlannerDecision(
+                    {"type": "move_to", "position": _stand_position(position)},
+                    f"move near planned {name} position for circuit automation",
+                )
+            action: dict[str, Any] = {
+                "type": "build",
+                "name": name,
+                "position": position,
+                "allow_nearby": False,
+            }
+            if key == "transfer_inserter":
+                action["direction"] = int(line.get("transfer_inserter_direction") or EAST)
+            return PlannerDecision(action, f"place {name} for circuit automation cell")
+
+        if line.get("pole_unit_number") and not _circuit_cell_powered(line):
+            pole_position = line["pole_position"]
+            if distance(player, pole_position) > 20:
+                return PlannerDecision({"type": "move_to", "position": pole_position}, "move near circuit automation pole to connect power")
+            return PlannerDecision(
+                {
+                    "type": "connect_power",
+                    "unit_number": line.get("pole_unit_number"),
+                    "name": "small-electric-pole",
+                    "position": pole_position,
+                },
+                "connect circuit automation pole to nearby electric network",
+            )
+
+        cable_assembler = line.get("cable_assembler")
+        circuit_assembler = line.get("circuit_assembler")
+        if cable_assembler and cable_assembler.get("recipe") != "copper-cable":
+            return self._set_recipe_decision(player, cable_assembler, "copper-cable")
+        if circuit_assembler and circuit_assembler.get("recipe") != "electronic-circuit":
+            return self._set_recipe_decision(player, circuit_assembler, "electronic-circuit")
+
+        circuit_output = entity_item_count(circuit_assembler, "electronic-circuit") if circuit_assembler else 0
+        if circuit_output > 0:
+            circuit_pos = _position(circuit_assembler)
+            if distance(player, circuit_pos) > 20:
+                return PlannerDecision(
+                    {"type": "move_to", "position": circuit_pos},
+                    "move near circuit assembler to collect produced circuits",
+                )
+            return PlannerDecision(
+                {
+                    "type": "take",
+                    "item": "electronic-circuit",
+                    "count": min(circuit_output, self.target_count),
+                    "unit_number": circuit_assembler.get("unit_number"),
+                    "name": "assembling-machine-1",
+                    "position": circuit_pos,
+                },
+                "take electronic circuits from assembler output",
+            )
+
+        if _circuit_cell_ready(line) and total_item_count(observation, "electronic-circuit") >= self.target_count:
+            return PlannerDecision(
+                None,
+                f"circuit automation cell is running and target reached: {total_item_count(observation, 'electronic-circuit')}/{self.target_count}",
+                done=True,
+            )
+
+        if circuit_assembler and entity_item_count(circuit_assembler, "copper-cable") < 6 and inventory_count(observation, "copper-cable") > 0:
+            circuit_pos = _position(circuit_assembler)
+            if distance(player, circuit_pos) > 20:
+                return PlannerDecision({"type": "move_to", "position": circuit_pos}, "move near circuit assembler to seed copper cable")
+            return PlannerDecision(
+                {
+                    "type": "insert",
+                    "item": "copper-cable",
+                    "count": min(12, inventory_count(observation, "copper-cable")),
+                    "unit_number": circuit_assembler.get("unit_number"),
+                    "name": "assembling-machine-1",
+                    "position": circuit_pos,
+                },
+                "seed circuit assembler with available copper cable",
+            )
+
+        if cable_assembler and entity_item_count(cable_assembler, "copper-plate") < 4:
+            if inventory_count(observation, "copper-plate") < 8:
+                decision = self.copper_skill.next_action(observation, target_count=8, inventory_only=True)
+                if not decision.done:
+                    return decision
+            cable_pos = _position(cable_assembler)
+            if distance(player, cable_pos) > 20:
+                return PlannerDecision({"type": "move_to", "position": cable_pos}, "move near cable assembler to insert copper")
+            return PlannerDecision(
+                {
+                    "type": "insert",
+                    "item": "copper-plate",
+                    "count": min(20, inventory_count(observation, "copper-plate")),
+                    "unit_number": cable_assembler.get("unit_number"),
+                    "name": "assembling-machine-1",
+                    "position": cable_pos,
+                },
+                "insert copper plates into cable assembler",
+            )
+
+        if circuit_assembler and entity_item_count(circuit_assembler, "iron-plate") < 4:
+            if inventory_count(observation, "iron-plate") < 8:
+                decision = self.iron_skill.next_action(observation, target_count=8, inventory_only=True)
+                if not decision.done:
+                    return decision
+            circuit_pos = _position(circuit_assembler)
+            if distance(player, circuit_pos) > 20:
+                return PlannerDecision({"type": "move_to", "position": circuit_pos}, "move near circuit assembler to insert iron")
+            return PlannerDecision(
+                {
+                    "type": "insert",
+                    "item": "iron-plate",
+                    "count": min(20, inventory_count(observation, "iron-plate")),
+                    "unit_number": circuit_assembler.get("unit_number"),
+                    "name": "assembling-machine-1",
+                    "position": circuit_pos,
+                },
+                "insert iron plates into circuit assembler",
+            )
+
+        return PlannerDecision(
+            {"type": "wait", "ticks": 600},
+            "wait for assembler cell to make copper cable and electronic circuits",
+        )
+
+    def _set_recipe_decision(
+        self,
+        player: dict[str, float],
+        assembler: dict[str, Any],
+        recipe: str,
+    ) -> PlannerDecision:
+        position = _position(assembler)
+        if distance(player, position) > 20:
+            return PlannerDecision({"type": "move_to", "position": position}, f"move near assembler to set {recipe}")
+        return PlannerDecision(
+            {
+                "type": "set_recipe",
+                "recipe": recipe,
+                "unit_number": assembler.get("unit_number"),
+                "name": "assembling-machine-1",
+                "position": position,
+            },
+            f"set assembler recipe to {recipe}",
+        )
+
+    def _ensure_item_quantity(
+        self,
+        observation: dict[str, Any],
+        player: dict[str, float],
+        item: str,
+        quantity: int,
+    ) -> PlannerDecision | None:
+        if inventory_count(observation, item) >= quantity:
+            return None
+        if craftable_count(observation, item) > 0:
+            return PlannerDecision(
+                {
+                    "type": "craft",
+                    "recipe": item,
+                    "count": min(quantity - inventory_count(observation, item), craftable_count(observation, item)),
+                },
+                f"craft {item} for circuit automation",
+            )
+
+        if item == "assembling-machine-1":
+            for prerequisite, count in [
+                ("electronic-circuit", 3 * quantity),
+                ("iron-gear-wheel", 5 * quantity),
+                ("iron-plate", 9 * quantity),
+            ]:
+                decision = self._ensure_item_quantity(observation, player, prerequisite, count)
+                if decision is not None:
+                    return decision
+            return None
+
+        if item == "inserter":
+            for prerequisite, count in [
+                ("electronic-circuit", quantity),
+                ("iron-gear-wheel", quantity),
+                ("iron-plate", quantity),
+            ]:
+                decision = self._ensure_item_quantity(observation, player, prerequisite, count)
+                if decision is not None:
+                    return decision
+            return None
+
+        if item == "electronic-circuit":
+            decision = self.hand_circuit_skill.next_action(observation)
+            if not decision.done:
+                return decision
+            return None
+
+        if item == "iron-gear-wheel":
+            if craftable_count(observation, "iron-gear-wheel") > 0:
+                return PlannerDecision(
+                    {
+                        "type": "craft",
+                        "recipe": "iron-gear-wheel",
+                        "count": min(quantity - inventory_count(observation, "iron-gear-wheel"), craftable_count(observation, "iron-gear-wheel")),
+                    },
+                    "craft gears for circuit automation",
+                )
+            return self._ensure_item_quantity(observation, player, "iron-plate", 2 * (quantity - inventory_count(observation, "iron-gear-wheel")))
+
+        if item == "iron-plate":
+            decision = self.iron_skill.next_action(observation, target_count=quantity, inventory_only=True)
+            if not decision.done:
+                return decision
+            return None
+
+        if item == "copper-plate":
+            decision = self.copper_skill.next_action(observation, target_count=quantity, inventory_only=True)
+            if not decision.done:
+                return decision
+            return None
+
+        if item == "small-electric-pole":
+            return self.power_skill._ensure_item_quantity(observation, player, item, quantity)
+
+        return PlannerDecision(None, f"missing {item} and no circuit automation prerequisite path is implemented")
+
+
 def _research_root(observation: dict[str, Any]) -> dict[str, Any]:
     value = observation.get("research")
     return value if isinstance(value, dict) else {}
@@ -1368,3 +1650,206 @@ def _select_lab_site(observation: dict[str, Any]) -> dict[str, Any] | None:
         )
     )
     return candidates[0]
+
+
+def _find_circuit_automation_cell(observation: dict[str, Any]) -> dict[str, Any] | None:
+    assemblers = entities_named(observation, "assembling-machine-1")
+    cable_candidates = [item for item in assemblers if item.get("recipe") == "copper-cable"]
+    for cable in cable_candidates:
+        cable_pos = _position(cable)
+        layout = _circuit_cell_layout_from_cable_position(cable_pos)
+        layout["cable_assembler"] = cable
+        layout["circuit_assembler"] = _entity_near(
+            observation,
+            "assembling-machine-1",
+            layout["circuit_assembler_position"],
+            radius=1.5,
+        )
+        layout["transfer_inserter"] = _entity_near(
+            observation,
+            "inserter",
+            layout["transfer_inserter_position"],
+            radius=0.75,
+        )
+        layout["pole"] = _entity_near(observation, "small-electric-pole", layout["pole_position"], radius=1.0)
+        if layout["pole"] is not None:
+            layout["pole_unit_number"] = layout["pole"].get("unit_number")
+        return layout
+
+    circuit_candidates = [item for item in assemblers if item.get("recipe") == "electronic-circuit"]
+    for circuit in circuit_candidates:
+        circuit_pos = _position(circuit)
+        layout = _circuit_cell_layout_from_circuit_position(circuit_pos)
+        layout["circuit_assembler"] = circuit
+        layout["cable_assembler"] = _entity_near(
+            observation,
+            "assembling-machine-1",
+            layout["cable_assembler_position"],
+            radius=1.5,
+        )
+        layout["transfer_inserter"] = _entity_near(
+            observation,
+            "inserter",
+            layout["transfer_inserter_position"],
+            radius=0.75,
+        )
+        layout["pole"] = _entity_near(observation, "small-electric-pole", layout["pole_position"], radius=1.0)
+        if layout["pole"] is not None:
+            layout["pole_unit_number"] = layout["pole"].get("unit_number")
+        return layout
+
+    unassigned = [item for item in assemblers if not item.get("recipe")]
+    for cable in unassigned:
+        cable_pos = _position(cable)
+        layout = _circuit_cell_layout_from_cable_position(cable_pos)
+        circuit = _entity_near(
+            observation,
+            "assembling-machine-1",
+            layout["circuit_assembler_position"],
+            radius=1.5,
+        )
+        if circuit is None:
+            continue
+        layout["cable_assembler"] = cable
+        layout["circuit_assembler"] = circuit
+        layout["transfer_inserter"] = _entity_near(
+            observation,
+            "inserter",
+            layout["transfer_inserter_position"],
+            radius=0.75,
+        )
+        layout["pole"] = _entity_near(observation, "small-electric-pole", layout["pole_position"], radius=1.0)
+        if layout["pole"] is not None:
+            layout["pole_unit_number"] = layout["pole"].get("unit_number")
+        return layout
+
+    for cable in unassigned:
+        cable_pos = _position(cable)
+        layout = _circuit_cell_layout_from_cable_position(cable_pos)
+        layout["cable_assembler"] = cable
+        layout["circuit_assembler"] = _entity_near(
+            observation,
+            "assembling-machine-1",
+            layout["circuit_assembler_position"],
+            radius=1.5,
+        )
+        layout["transfer_inserter"] = _entity_near(
+            observation,
+            "inserter",
+            layout["transfer_inserter_position"],
+            radius=0.75,
+        )
+        layout["pole"] = _entity_near(observation, "small-electric-pole", layout["pole_position"], radius=1.0)
+        if layout["pole"] is not None:
+            layout["pole_unit_number"] = layout["pole"].get("unit_number")
+        return layout
+
+    return None
+
+
+def _select_circuit_automation_site(observation: dict[str, Any]) -> dict[str, Any] | None:
+    sites = observation.get("automation_sites")
+    if not isinstance(sites, list):
+        return None
+    candidates: list[dict[str, Any]] = []
+    for site in sites:
+        if not isinstance(site, dict):
+            continue
+        required = [
+            "pole_position",
+            "cable_assembler_position",
+            "circuit_assembler_position",
+            "transfer_inserter_position",
+        ]
+        if not all(isinstance(site.get(key), dict) for key in required):
+            continue
+        candidates.append(
+            {
+                "pole_position": _xy_position(site["pole_position"]),
+                "cable_assembler_position": _xy_position(site["cable_assembler_position"]),
+                "circuit_assembler_position": _xy_position(site["circuit_assembler_position"]),
+                "transfer_inserter_position": _xy_position(site["transfer_inserter_position"]),
+                "transfer_inserter_direction": int(site.get("transfer_inserter_direction") or EAST),
+                "pole_unit_number": site.get("pole_unit_number"),
+                "source_pole_unit_number": site.get("source_pole_unit_number"),
+                "powered": site.get("powered"),
+                "distance": site.get("distance"),
+                "pole": None,
+                "cable_assembler": None,
+                "circuit_assembler": None,
+                "transfer_inserter": None,
+            }
+        )
+    if not candidates:
+        return None
+    candidates.sort(
+        key=lambda item: (
+            0 if item.get("powered") else 1,
+            0 if item.get("pole_unit_number") else 1,
+            float(item.get("distance") or 999999),
+        )
+    )
+    return candidates[0]
+
+
+def _circuit_cell_layout_from_cable_position(cable_position: dict[str, float]) -> dict[str, Any]:
+    return {
+        "pole_position": {"x": cable_position["x"] + 2, "y": cable_position["y"] - 2},
+        "cable_assembler_position": cable_position,
+        "circuit_assembler_position": {"x": cable_position["x"] + 4, "y": cable_position["y"]},
+        "transfer_inserter_position": {"x": cable_position["x"] + 2, "y": cable_position["y"]},
+        "transfer_inserter_direction": EAST,
+        "pole": None,
+        "cable_assembler": None,
+        "circuit_assembler": None,
+        "transfer_inserter": None,
+    }
+
+
+def _circuit_cell_layout_from_circuit_position(circuit_position: dict[str, float]) -> dict[str, Any]:
+    return _circuit_cell_layout_from_cable_position({"x": circuit_position["x"] - 4, "y": circuit_position["y"]})
+
+
+def _missing_circuit_cell_item(observation: dict[str, Any], line: dict[str, Any]) -> str | None:
+    if not line.get("pole_unit_number") and inventory_count(observation, "small-electric-pole") <= 0:
+        return "small-electric-pole"
+    missing_assemblers = _circuit_cell_required_count(line, "assembling-machine-1")
+    if missing_assemblers > inventory_count(observation, "assembling-machine-1"):
+        return "assembling-machine-1"
+    if line.get("transfer_inserter") is None and inventory_count(observation, "inserter") <= 0:
+        return "inserter"
+    return None
+
+
+def _circuit_cell_required_count(line: dict[str, Any], item: str) -> int:
+    if item == "assembling-machine-1":
+        return sum(1 for key in ("cable_assembler", "circuit_assembler") if line.get(key) is None)
+    return 1
+
+
+def _circuit_cell_ready(line: dict[str, Any]) -> bool:
+    cable = line.get("cable_assembler")
+    circuit = line.get("circuit_assembler")
+    return bool(
+        line.get("pole_unit_number")
+        and cable
+        and circuit
+        and line.get("transfer_inserter")
+        and cable.get("recipe") == "copper-cable"
+        and circuit.get("recipe") == "electronic-circuit"
+    )
+
+
+def _circuit_cell_powered(line: dict[str, Any]) -> bool:
+    for key in ("cable_assembler", "circuit_assembler", "transfer_inserter"):
+        entity = line.get(key)
+        if isinstance(entity, dict) and entity.get("electric_network_connected"):
+            return True
+    return False
+
+
+def _xy_position(value: dict[str, Any]) -> dict[str, float]:
+    return {
+        "x": float(value.get("x") or 0.0),
+        "y": float(value.get("y") or 0.0),
+    }

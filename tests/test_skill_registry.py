@@ -40,21 +40,27 @@ class SkillRegistryTests(unittest.TestCase):
         self.assertEqual(status.executor, "ResearchAutomationSkill")
         self.assertFalse(status.codex_required)
 
+    def test_circuit_automation_skill_is_implemented(self):
+        status = skill_status("automate_electronic_circuit_line")
+        self.assertTrue(status.implemented)
+        self.assertEqual(status.executor, "CircuitAutomationSkill")
+        self.assertFalse(status.codex_required)
+
     def test_missing_skill_writes_backlog(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             runtime = Path(temp_dir)
             annotated = annotate_strategy_with_skill_status(
                 {
-                    "selected_skill": "automate_electronic_circuit_line",
-                    "reason": "green circuits need assembler automation",
-                    "blockers": ["assembling machine line"],
+                    "selected_skill": "plan_factory_site",
+                    "reason": "larger production blocks need a reserved district",
+                    "blockers": ["factory site plan"],
                 },
                 runtime_dir=runtime,
             )
             self.assertFalse(annotated["skill_status"]["implemented"])
             backlog = runtime / "missing-skills.jsonl"
             self.assertTrue(backlog.exists())
-            self.assertIn("automate_electronic_circuit_line", backlog.read_text(encoding="utf-8"))
+            self.assertIn("plan_factory_site", backlog.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

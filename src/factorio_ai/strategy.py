@@ -125,7 +125,7 @@ SKILL_CATALOG: dict[str, SkillContract] = {
     "automate_electronic_circuit_line": SkillContract(
         name="automate_electronic_circuit_line",
         description="Build an assembler-based green circuit line fed by iron plates and copper cable.",
-        executor="future CircuitAutomationSkill",
+        executor="CircuitAutomationSkill",
         preconditions=[
             "automation researched",
             "electric power available",
@@ -364,7 +364,7 @@ def heuristic_strategy(
                 "automation_researched=true",
             ],
             blockers=["assembler-based production lines"],
-            expected_effect="Ask Codex to implement the next executor for belts, inserters, assemblers, and power poles.",
+            expected_effect="Build the first powered assembler cell for electronic circuit production.",
         ).to_dict()
 
     if total_iron < 10:

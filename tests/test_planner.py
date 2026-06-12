@@ -3,6 +3,7 @@ import unittest
 from factorio_ai.planner import (
     AutomationScienceSkill,
     BeltSmeltingLineSkill,
+    CircuitAutomationSkill,
     CopperPlateSkill,
     ElectronicCircuitSkill,
     IronPlateSkill,
@@ -599,6 +600,112 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["type"], "insert")
         self.assertEqual(decision.action["item"], "automation-science-pack")
 
+    def test_circuit_automation_delegates_until_automation_is_researched(self):
+        obs = powered_research_observation()
+        decision = CircuitAutomationSkill().next_action(obs)
+        self.assertEqual(decision.action["type"], "research")
+        self.assertEqual(decision.action["technology"], "automation")
+
+    def test_circuit_automation_builds_missing_pole_before_cell(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {
+            "small-electric-pole": 1,
+            "assembling-machine-1": 2,
+            "inserter": 1,
+        }
+        obs["automation_sites"][0].pop("pole_unit_number")
+        obs["automation_sites"][0]["source_pole_unit_number"] = 604
+        decision = CircuitAutomationSkill().next_action(obs)
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "small-electric-pole")
+
+    def test_circuit_automation_crafts_assembler_when_missing(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {
+            "electronic-circuit": 6,
+            "iron-gear-wheel": 10,
+            "iron-plate": 18,
+            "inserter": 1,
+        }
+        obs["craftable"] = {"assembling-machine-1": 2}
+        decision = CircuitAutomationSkill().next_action(obs)
+        self.assertEqual(decision.action["type"], "craft")
+        self.assertEqual(decision.action["recipe"], "assembling-machine-1")
+
+    def test_circuit_automation_places_cable_assembler_first(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"assembling-machine-1": 2, "inserter": 1}
+        decision = CircuitAutomationSkill().next_action(obs)
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "assembling-machine-1")
+        self.assertEqual(decision.action["position"], {"x": 2.0, "y": 2.0})
+
+    def test_circuit_automation_sets_assembler_recipe(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"copper-plate": 8, "iron-plate": 8}
+        obs["entities"].extend(circuit_cell_entities(cable_recipe=None, circuit_recipe="electronic-circuit"))
+        decision = CircuitAutomationSkill().next_action(obs)
+        self.assertEqual(decision.action["type"], "set_recipe")
+        self.assertEqual(decision.action["recipe"], "copper-cable")
+
+    def test_circuit_automation_recognizes_unassigned_assembler_pair(self):
+        obs = powered_automation_observation()
+        obs["player"]["position"] = {"x": 6, "y": 2}
+        obs["inventory"] = {"copper-plate": 8, "iron-plate": 8}
+        obs["entities"].extend(circuit_cell_entities(cable_recipe=None, circuit_recipe=None))
+        decision = CircuitAutomationSkill().next_action(obs)
+        self.assertEqual(decision.action["type"], "set_recipe")
+        self.assertEqual(decision.action["recipe"], "copper-cable")
+
+    def test_circuit_automation_connects_unpowered_cell(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"copper-plate": 8, "iron-plate": 8}
+        obs["entities"].extend(circuit_cell_entities(powered=False))
+        decision = CircuitAutomationSkill().next_action(obs)
+        self.assertEqual(decision.action["type"], "connect_power")
+        self.assertEqual(decision.action["unit_number"], 804)
+
+    def test_circuit_automation_inserts_copper_into_cable_assembler(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"copper-plate": 8, "iron-plate": 8}
+        obs["entities"].extend(circuit_cell_entities())
+        decision = CircuitAutomationSkill().next_action(obs)
+        self.assertEqual(decision.action["type"], "insert")
+        self.assertEqual(decision.action["item"], "copper-plate")
+
+    def test_circuit_automation_seeds_existing_copper_cable(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"copper-cable": 12, "copper-plate": 8, "iron-plate": 8}
+        obs["entities"].extend(circuit_cell_entities())
+        decision = CircuitAutomationSkill().next_action(obs)
+        self.assertEqual(decision.action["type"], "insert")
+        self.assertEqual(decision.action["item"], "copper-cable")
+
+    def test_circuit_automation_inserts_iron_into_circuit_assembler(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"copper-plate": 8, "iron-plate": 8}
+        entities = circuit_cell_entities(cable_inventory={"copper-plate": 4})
+        obs["entities"].extend(entities)
+        decision = CircuitAutomationSkill().next_action(obs)
+        self.assertEqual(decision.action["type"], "insert")
+        self.assertEqual(decision.action["item"], "iron-plate")
+
+    def test_circuit_automation_takes_output_from_circuit_assembler(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {}
+        obs["entities"].extend(circuit_cell_entities(circuit_inventory={"electronic-circuit": 5}))
+        decision = CircuitAutomationSkill().next_action(obs)
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["item"], "electronic-circuit")
+
+    def test_circuit_automation_done_when_cell_is_running_and_target_exists(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"electronic-circuit": 5}
+        obs["entities"].extend(circuit_cell_entities(cable_inventory={"copper-plate": 4}, circuit_inventory={"iron-plate": 4}))
+        decision = CircuitAutomationSkill(target_count=5).next_action(obs)
+        self.assertTrue(decision.done)
+        self.assertIsNone(decision.action)
+
 
 def powered_research_observation():
     obs = base_observation()
@@ -647,6 +754,70 @@ def powered_research_observation():
         },
     ]
     return obs
+
+
+def powered_automation_observation():
+    obs = powered_research_observation()
+    obs["research"]["technologies"]["automation"]["researched"] = True
+    obs["automation_sites"] = [
+        {
+            "powered": True,
+            "pole_unit_number": 604,
+            "pole_position": {"x": 4, "y": 0},
+            "cable_assembler_position": {"x": 2, "y": 2},
+            "circuit_assembler_position": {"x": 6, "y": 2},
+            "transfer_inserter_position": {"x": 4, "y": 2},
+            "transfer_inserter_direction": 4,
+            "distance": 4,
+        }
+    ]
+    return obs
+
+
+def circuit_cell_entities(
+    cable_recipe="copper-cable",
+    circuit_recipe="electronic-circuit",
+    cable_inventory=None,
+    circuit_inventory=None,
+    powered=True,
+):
+    return [
+        {
+            "name": "assembling-machine-1",
+            "unit_number": 801,
+            "position": {"x": 2, "y": 2},
+            "distance": 2,
+            "recipe": cable_recipe,
+            "electric_network_connected": powered,
+            "inventories": {"1": cable_inventory or {}},
+        },
+        {
+            "name": "assembling-machine-1",
+            "unit_number": 802,
+            "position": {"x": 6, "y": 2},
+            "distance": 6,
+            "recipe": circuit_recipe,
+            "electric_network_connected": powered,
+            "inventories": {"1": circuit_inventory or {}},
+        },
+        {
+            "name": "inserter",
+            "unit_number": 803,
+            "position": {"x": 4, "y": 2},
+            "distance": 4,
+            "direction": 4,
+            "electric_network_connected": powered,
+            "inventories": {},
+        },
+        {
+            "name": "small-electric-pole",
+            "unit_number": 804,
+            "position": {"x": 4, "y": 0},
+            "distance": 4,
+            "electric_network_connected": powered,
+            "inventories": {},
+        },
+    ]
 
 
 if __name__ == "__main__":

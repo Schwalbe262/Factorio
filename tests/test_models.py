@@ -17,6 +17,14 @@ class ModelTests(unittest.TestCase):
         action = {"type": "research", "technology": "automation"}
         self.assertEqual(validate_action(action), action)
 
+    def test_validate_action_accepts_set_recipe(self):
+        action = {"type": "set_recipe", "recipe": "electronic-circuit", "unit_number": 10}
+        self.assertEqual(validate_action(action), action)
+
+    def test_validate_action_accepts_connect_power(self):
+        action = {"type": "connect_power", "unit_number": 10}
+        self.assertEqual(validate_action(action), action)
+
     def test_validate_action_rejects_unsupported_type(self):
         with self.assertRaises(ActionValidationError):
             validate_action({"type": "raw_lua", "code": "game.print('no')"})

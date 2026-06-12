@@ -4,7 +4,18 @@ from dataclasses import dataclass
 from typing import Any
 
 
-ALLOWED_ACTION_TYPES = {"move_to", "mine", "craft", "build", "insert", "take", "research", "wait"}
+ALLOWED_ACTION_TYPES = {
+    "move_to",
+    "mine",
+    "craft",
+    "build",
+    "insert",
+    "take",
+    "set_recipe",
+    "connect_power",
+    "research",
+    "wait",
+}
 
 
 class ActionValidationError(ValueError):
@@ -41,6 +52,13 @@ def validate_action(action: dict[str, Any]) -> dict[str, Any]:
         if "position" not in action and "unit_number" not in action:
             raise ActionValidationError(f"{action_type} requires position or unit_number")
         _require_positive_count(action)
+    elif action_type == "set_recipe":
+        _require_string(action, "recipe")
+        if "position" not in action and "unit_number" not in action:
+            raise ActionValidationError("set_recipe requires position or unit_number")
+    elif action_type == "connect_power":
+        if "position" not in action and "unit_number" not in action:
+            raise ActionValidationError("connect_power requires position or unit_number")
     elif action_type == "research":
         _require_string(action, "technology")
     elif action_type == "wait":

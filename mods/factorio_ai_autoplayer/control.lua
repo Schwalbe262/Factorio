@@ -4,7 +4,7 @@ local OBSERVE_RADIUS = 512
 local POWER_SITE_RADIUS = 512
 local POWER_SITE_WATER_TILE_LIMIT = 1200
 local LAB_SITE_RADIUS = 96
-local POLE_WIRE_REACH = 9
+local POLE_WIRE_REACH = 7.5
 local MOVE_STOP_DISTANCE = 0.35
 local PLAYER_MOVE_STEP = 0.10
 
@@ -33,6 +33,10 @@ local VIRTUAL_RECIPES = {
   ["burner-inserter"] = {
     ingredients = { ["iron-plate"] = 1, ["iron-gear-wheel"] = 1 },
     results = { ["burner-inserter"] = 1 }
+  },
+  ["inserter"] = {
+    ingredients = { ["electronic-circuit"] = 1, ["iron-gear-wheel"] = 1, ["iron-plate"] = 1 },
+    results = { ["inserter"] = 1 }
   },
   ["pipe"] = {
     ingredients = { ["iron-plate"] = 1 },
@@ -937,6 +941,101 @@ local function collect_lab_sites(surface, position, force)
   return sites
 end
 
+local function automation_cell_layout(pole_position)
+  return {
+    pole_position = { x = pole_position.x, y = pole_position.y },
+    cable_assembler_position = { x = pole_position.x - 2, y = pole_position.y + 2 },
+    circuit_assembler_position = { x = pole_position.x + 2, y = pole_position.y + 2 },
+    transfer_inserter_position = { x = pole_position.x, y = pole_position.y + 2 },
+    transfer_inserter_direction = defines.direction.east
+  }
+end
+
+local function add_automation_site(sites, checked, surface, force, pole, pole_position, source_pole)
+  local layout = automation_cell_layout(pole_position)
+  if not pole and not can_place_manual(surface, force, "small-electric-pole", layout.pole_position, defines.direction.north) then
+    return
+  end
+  if not can_place_manual(surface, force, "assembling-machine-1", layout.cable_assembler_position, defines.direction.north)
+    or not can_place_manual(surface, force, "assembling-machine-1", layout.circuit_assembler_position, defines.direction.north)
+    or not can_place_manual(surface, force, "inserter", layout.transfer_inserter_position, layout.transfer_inserter_direction) then
+    return
+  end
+  local key = tostring(round(layout.pole_position.x)) .. "," .. tostring(round(layout.pole_position.y))
+  if checked[key] then
+    return
+  end
+  checked[key] = true
+  local site = {
+    pole_position = position_table(layout.pole_position),
+    cable_assembler_position = position_table(layout.cable_assembler_position),
+    circuit_assembler_position = position_table(layout.circuit_assembler_position),
+    transfer_inserter_position = position_table(layout.transfer_inserter_position),
+    transfer_inserter_direction = layout.transfer_inserter_direction,
+    distance = round(distance(source_pole.position, layout.transfer_inserter_position)),
+    powered = entity_connected_to_electric_network(source_pole)
+  }
+  if pole and pole.valid then
+    site.pole_unit_number = pole.unit_number
+  else
+    site.source_pole_unit_number = source_pole.unit_number
+  end
+  table.insert(sites, site)
+end
+
+local function collect_automation_sites(surface, position, force)
+  local sites = {}
+  local checked = {}
+  local poles = surface.find_entities_filtered({
+    position = position,
+    radius = OBSERVE_RADIUS,
+    name = "small-electric-pole",
+    limit = 80
+  })
+  table.sort(poles, function(a, b)
+    local ap = entity_connected_to_electric_network(a) and 0 or 1
+    local bp = entity_connected_to_electric_network(b) and 0 or 1
+    if ap ~= bp then
+      return ap < bp
+    end
+    return distance(position, a.position) < distance(position, b.position)
+  end)
+
+  for _, source_pole in pairs(poles) do
+    if source_pole.valid then
+      local source_position = { x = source_pole.position.x, y = source_pole.position.y }
+      add_automation_site(sites, checked, surface, force, source_pole, source_position, source_pole)
+      if #sites >= 40 then
+        break
+      end
+      for dx = -8, 8 do
+        for dy = -8, 8 do
+          local pole_position = { x = source_pole.position.x + dx, y = source_pole.position.y + dy }
+          if distance(source_pole.position, pole_position) <= POLE_WIRE_REACH then
+            add_automation_site(sites, checked, surface, force, nil, pole_position, source_pole)
+            if #sites >= 40 then
+              break
+            end
+          end
+        end
+        if #sites >= 40 then
+          break
+        end
+      end
+    end
+    if #sites >= 40 then
+      break
+    end
+  end
+  table.sort(sites, function(a, b)
+    if a.powered ~= b.powered then
+      return a.powered == true
+    end
+    return (a.distance or 999999) < (b.distance or 999999)
+  end)
+  return sites
+end
+
 local function virtual_craftable(agent)
   local craftable = {}
   local inventory = main_inventory(agent)
@@ -993,6 +1092,7 @@ local function observe(command, options)
     entities = collect_entities(surface, position),
     power_sites = collect_power_sites(surface, position, agent.force),
     lab_sites = collect_lab_sites(surface, position, agent.force),
+    automation_sites = collect_automation_sites(surface, position, agent.force),
     research = collect_research(agent.force)
   })
   return response
@@ -1236,30 +1336,56 @@ local function connect_pole_to_neighbours(surface, pole)
       if ok_other and other_connector then
         local already = false
         pcall(function()
-          already = connector.is_connected_to(other_connector, defines.wire_origin.script)
+          already = connector.is_connected_to(other_connector, defines.wire_origin.player)
         end)
-          if not already then
-            local ok_connect, made = pcall(function()
+        if already then
+          connected = connected + 1
+        else
+          local ok_connect, made = pcall(function()
+            return connector.connect_to(other_connector, true, defines.wire_origin.player)
+          end)
+          if not ok_connect then
+            ok_connect, made = pcall(function()
+              return connector.connect_to(other_connector, false, defines.wire_origin.player)
+            end)
+          end
+          if not ok_connect then
+            ok_connect, made = pcall(function()
+              return connector.connect_to(other_connector, true)
+            end)
+          end
+          if not ok_connect then
+            ok_connect, made = pcall(function()
+              return connector.connect_to(other_connector, false)
+            end)
+          end
+          if not ok_connect then
+            ok_connect, made = pcall(function()
+              return connector.connect_to(other_connector)
+            end)
+          end
+          if not ok_connect then
+            ok_connect, made = pcall(function()
               return connector.connect_to(other_connector, true, defines.wire_origin.script)
             end)
-            if not ok_connect then
-              ok_connect, made = pcall(function()
-                return connector.connect_to(other_connector, false, defines.wire_origin.script)
-              end)
-            end
-            if not ok_connect then
-              ok_connect, made = pcall(function()
-                return connector.connect_to(other_connector, defines.wire_origin.script)
-              end)
-            end
-            if not ok_connect then
-              ok_connect, made = pcall(function()
-                return connector.connect_to(other_connector)
-              end)
-            end
-            if ok_connect and made ~= false then
-              connected = connected + 1
-            end
+          end
+          if not ok_connect then
+            ok_connect, made = pcall(function()
+              return connector.connect_to(other_connector, false, defines.wire_origin.script)
+            end)
+          end
+          local connected_now = false
+          pcall(function()
+            connected_now = connector.is_connected_to(other_connector, defines.wire_origin.player)
+          end)
+          if not connected_now then
+            pcall(function()
+              connected_now = connector.is_connected_to(other_connector, defines.wire_origin.script)
+            end)
+          end
+          if ok_connect and (made ~= false or connected_now) then
+            connected = connected + 1
+          end
         end
       end
     end
@@ -1351,6 +1477,30 @@ local function action_build(agent, action)
   })
 end
 
+local function action_connect_power(agent, action)
+  local target = find_entity(agent.surface, action)
+  if not target or not target.valid then
+    return result_err("connect_power target not found")
+  end
+  if target.name ~= "small-electric-pole" then
+    return result_err("connect_power target must be a small electric pole", { target = target.name })
+  end
+  if distance(agent.position, target.position) > (action.reach or 64) then
+    return result_err("connect_power target out of reach")
+  end
+  local connected_wires = connect_pole_to_neighbours(agent.surface, target)
+  if connected_wires <= 0 then
+    return result_err("connect_power did not connect any neighbouring pole", { target = target.unit_number })
+  end
+  return result_ok({
+    action = "connect_power",
+    target = target.name,
+    target_unit_number = target.unit_number,
+    connected_wires = connected_wires,
+    position = position_table(target.position)
+  })
+end
+
 local function action_research(agent, action)
   if type(action.technology) ~= "string" then
     return result_err("research requires technology")
@@ -1410,6 +1560,43 @@ local function action_research(agent, action)
     return result_err("setting research failed", { technology = technology.name })
   end
   return result_ok({ action = "research", technology = technology.name, current_research = technology.name })
+end
+
+local function action_set_recipe(agent, action)
+  if type(action.recipe) ~= "string" then
+    return result_err("set_recipe requires recipe")
+  end
+  local target = find_entity(agent.surface, action)
+  if not target or not target.valid then
+    return result_err("set_recipe target not found")
+  end
+  if distance(agent.position, target.position) > (action.reach or 32) then
+    return result_err("set_recipe target out of reach")
+  end
+  local recipe = agent.force.recipes[action.recipe]
+  if not recipe then
+    return result_err("recipe not found", { recipe = action.recipe })
+  end
+  if not recipe.enabled then
+    return result_err("recipe is not enabled", { recipe = action.recipe })
+  end
+  local ok, result = pcall(function()
+    return target.set_recipe(action.recipe)
+  end)
+  if not ok or result == false then
+    ok, result = pcall(function()
+      return target.set_recipe(recipe)
+    end)
+  end
+  if not ok or result == false then
+    return result_err("set_recipe failed", { target = target.name, recipe = action.recipe })
+  end
+  return result_ok({
+    action = "set_recipe",
+    target = target.name,
+    target_unit_number = target.unit_number,
+    recipe = action.recipe
+  })
 end
 
 local function action_insert(agent, action)
@@ -1579,10 +1766,14 @@ local function execute_action(command, action)
     return action_craft(agent, action)
   elseif action_type == "build" then
     return action_build(agent, action)
+  elseif action_type == "connect_power" then
+    return action_connect_power(agent, action)
   elseif action_type == "insert" then
     return action_insert(agent, action)
   elseif action_type == "take" then
     return action_take(agent, action)
+  elseif action_type == "set_recipe" then
+    return action_set_recipe(agent, action)
   elseif action_type == "research" then
     return action_research(agent, action)
   elseif action_type == "wait" then
