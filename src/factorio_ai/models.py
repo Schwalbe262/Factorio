@@ -130,13 +130,26 @@ def nearest_resource(observation: dict[str, Any], name: str) -> dict[str, Any] |
 
 
 def nearest_entity(observation: dict[str, Any], name: str) -> dict[str, Any] | None:
-    entities = observation.get("entities")
-    if not isinstance(entities, list):
-        return None
-    candidates = [item for item in entities if isinstance(item, dict) and item.get("name") == name]
+    candidates = entities_named(observation, name)
     if not candidates:
         return None
     return min(candidates, key=lambda item: float(item.get("distance") or 999999))
+
+
+def entities_named(observation: dict[str, Any], name: str) -> list[dict[str, Any]]:
+    entities = observation.get("entities")
+    if not isinstance(entities, list):
+        return []
+    candidates = [item for item in entities if isinstance(item, dict) and item.get("name") == name]
+    seen: set[str] = set()
+    unique: list[dict[str, Any]] = []
+    for item in candidates:
+        key = str(item.get("unit_number") or item.get("position") or id(item))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+    return unique
 
 
 def entity_item_count(entity: dict[str, Any], item: str) -> int:

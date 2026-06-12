@@ -63,6 +63,31 @@ def write_server_settings(cfg: AppConfig) -> Path:
     return settings_path
 
 
+def write_client_config(cfg: AppConfig) -> Path:
+    factorio_root = cfg.factorio_exe.parent.parent.parent
+    read_data = factorio_root / "data"
+    write_data = cfg.runtime_dir / "client-data"
+    write_data.mkdir(parents=True, exist_ok=True)
+    cfg.runtime_dir.mkdir(parents=True, exist_ok=True)
+    config_path = cfg.runtime_dir / "client-config.ini"
+    config_path.write_text(
+        "\n".join(
+            [
+                "; version=13",
+                "[path]",
+                f"read-data={read_data.as_posix()}",
+                f"write-data={write_data.as_posix()}",
+                "",
+                "[general]",
+                "locale=auto",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return config_path
+
+
 def create_save(cfg: AppConfig, overwrite: bool = False) -> Path:
     if not cfg.factorio_exe.exists():
         raise FileNotFoundError(f"Factorio executable not found: {cfg.factorio_exe}")
@@ -81,6 +106,26 @@ def create_save(cfg: AppConfig, overwrite: bool = False) -> Path:
     ]
     subprocess.run(command, check=True, cwd=str(REPO_ROOT))
     return cfg.save_path
+
+
+def start_gui_client(cfg: AppConfig, window_size: str = "1600x900", connect: bool = True) -> subprocess.Popen[bytes]:
+    if not cfg.factorio_exe.exists():
+        raise FileNotFoundError(f"Factorio executable not found: {cfg.factorio_exe}")
+    install_mod(cfg)
+    client_config = write_client_config(cfg)
+    command = [
+        str(cfg.factorio_exe),
+        "--config",
+        str(client_config),
+        "--mod-directory",
+        str(cfg.mod_runtime_dir),
+        "--disable-migration-window",
+        "--window-size",
+        window_size,
+    ]
+    if connect:
+        command.extend(["--mp-connect", f"{cfg.rcon_host}:{cfg.server_port}"])
+    return subprocess.Popen(command, cwd=str(REPO_ROOT))
 
 
 def start_server(cfg: AppConfig) -> subprocess.Popen[bytes]:

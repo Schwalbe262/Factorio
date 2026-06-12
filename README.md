@@ -51,11 +51,38 @@ Start a local Factorio server with RCON:
 factorio-ai start-server
 ```
 
+Launch a visible GUI client connected to that local server:
+
+```powershell
+factorio-ai launch-gui
+```
+
+`launch-gui` calls `factorio.exe` directly with a separate client config under `runtime/client-data`.
+This avoids the Steam launch confirmation dialog and lets the dedicated server and GUI client run
+at the same time on the local machine.
+
 In another terminal, run the iron plate MVP loop:
 
 ```powershell
 factorio-ai run-iron-mvp --target 10
 ```
+
+## Achievement-Compatible Track
+
+The current `factorio-ai` engine is a development and verification track. It uses a mod, RCON,
+and Lua commands, so it is not intended for Steam achievement runs.
+
+Achievement-compatible play must run as a separate vanilla track:
+
+- no mods;
+- no Lua console commands;
+- no RCON world mutation;
+- one normal Factorio client controlled through ordinary keyboard and mouse input;
+- screen or save-independent perception for inventory, map, entities, and production state.
+
+The planner and skill code should stay portable across both tracks. The mod/RCON track is used to
+iterate quickly and prove behavior, then the vanilla track reuses the same high-level decisions with
+a different executor.
 
 ## Slurm Worker
 

@@ -7,7 +7,7 @@ from typing import Any
 
 from .config import load_config
 from .controller import FactorioController
-from .factorio import create_save, install_mod, start_server, wait_for_rcon
+from .factorio import create_save, install_mod, start_gui_client, start_server, wait_for_rcon
 from . import remote_slurm
 
 
@@ -24,6 +24,10 @@ def main(argv: list[str] | None = None) -> None:
     start_server_parser = subparsers.add_parser("start-server", help="Start local Factorio server and wait")
     start_server_parser.add_argument("--no-wait-rcon", action="store_true")
 
+    launch_gui_parser = subparsers.add_parser("launch-gui", help="Launch a GUI Factorio client and connect to the local server")
+    launch_gui_parser.add_argument("--window-size", default="1600x900")
+    launch_gui_parser.add_argument("--no-connect", action="store_true")
+
     subparsers.add_parser("observe", help="Print /ai_observe JSON")
 
     action_parser = subparsers.add_parser("action", help="Execute /ai_action JSON")
@@ -32,6 +36,10 @@ def main(argv: list[str] | None = None) -> None:
     run_parser = subparsers.add_parser("run-iron-mvp", help="Run the iron plate MVP loop")
     run_parser.add_argument("--target", type=int, default=10)
     run_parser.add_argument("--max-steps", type=int, default=200)
+
+    science_parser = subparsers.add_parser("run-science-mvp", help="Run the automation science MVP loop")
+    science_parser.add_argument("--target", type=int, default=5)
+    science_parser.add_argument("--max-steps", type=int, default=400)
 
     subparsers.add_parser("slurm-deploy", help="Deploy project source to the Slurm remote directory")
     subparsers.add_parser("slurm-start-worker", help="Submit the persistent Slurm worker job")
@@ -65,6 +73,11 @@ def main(argv: list[str] | None = None) -> None:
             raise
         return
 
+    if args.command == "launch-gui":
+        proc = start_gui_client(cfg, window_size=args.window_size, connect=not args.no_connect)
+        print_json({"ok": True, "pid": proc.pid})
+        return
+
     if args.command == "observe":
         print_json(FactorioController(cfg).observe())
         return
@@ -84,7 +97,22 @@ def main(argv: list[str] | None = None) -> None:
                 "ok": summary.ok,
                 "reason": summary.reason,
                 "steps": summary.steps,
-                "ironPlateCount": summary.iron_plate_count,
+                "ironPlateCount": summary.item_count,
+                "logPath": str(summary.log_path),
+            }
+        )
+        if not summary.ok:
+            raise SystemExit(1)
+        return
+
+    if args.command == "run-science-mvp":
+        summary = FactorioController(cfg).run_science_mvp(target=args.target, max_steps=args.max_steps)
+        print_json(
+            {
+                "ok": summary.ok,
+                "reason": summary.reason,
+                "steps": summary.steps,
+                "automationSciencePackCount": summary.item_count,
                 "logPath": str(summary.log_path),
             }
         )

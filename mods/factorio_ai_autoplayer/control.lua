@@ -1,6 +1,8 @@
 local MOD = "factorio_ai_autoplayer"
 local AGENT_NAME = "AI"
 local OBSERVE_RADIUS = 512
+local MOVE_STOP_DISTANCE = 0.35
+local PLAYER_MOVE_STEP = 0.10
 
 local VIRTUAL_STARTER_ITEMS = {
   ["burner-mining-drill"] = 1,
@@ -19,6 +21,10 @@ local VIRTUAL_RECIPES = {
   ["burner-mining-drill"] = {
     ingredients = { ["iron-plate"] = 3, ["iron-gear-wheel"] = 3, stone = 5 },
     results = { ["burner-mining-drill"] = 1 }
+  },
+  ["automation-science-pack"] = {
+    ingredients = { ["copper-plate"] = 1, ["iron-gear-wheel"] = 1 },
+    results = { ["automation-science-pack"] = 1 }
   }
 }
 
@@ -88,6 +94,134 @@ local function distance(a, b)
   return math.sqrt(dx * dx + dy * dy)
 end
 
+local function walking_direction(dx, dy)
+  local x = 0
+  local y = 0
+  if dx > 0.15 then
+    x = 1
+  elseif dx < -0.15 then
+    x = -1
+  end
+  if dy > 0.15 then
+    y = 1
+  elseif dy < -0.15 then
+    y = -1
+  end
+
+  if x == 0 and y < 0 then return defines.direction.north end
+  if x > 0 and y < 0 then return defines.direction.northeast end
+  if x > 0 and y == 0 then return defines.direction.east end
+  if x > 0 and y > 0 then return defines.direction.southeast end
+  if x == 0 and y > 0 then return defines.direction.south end
+  if x < 0 and y > 0 then return defines.direction.southwest end
+  if x < 0 and y == 0 then return defines.direction.west end
+  if x < 0 and y < 0 then return defines.direction.northwest end
+  return defines.direction.north
+end
+
+local function set_character_walking(character, walking, direction)
+  if not character or not character.valid then
+    return false, "agent character is not valid"
+  end
+  local ok, err = pcall(function()
+    character.walking_state = {
+      walking = walking,
+      direction = direction or defines.direction.north
+    }
+  end)
+  if not ok then
+    return false, tostring(err)
+  end
+  return true, nil
+end
+
+local function command_character_to(character, position)
+  if not character or not character.valid then
+    return false, "agent character is not valid"
+  end
+  if not character.commandable then
+    return false, "agent character is not commandable"
+  end
+  local ok, err = pcall(function()
+    character.commandable.set_command({
+      type = defines.command.go_to_location,
+      destination = position,
+      distraction = defines.distraction.none,
+      radius = MOVE_STOP_DISTANCE
+    })
+  end)
+  if not ok then
+    return false, tostring(err)
+  end
+  return true, nil
+end
+
+local function stop_character_command(character)
+  if not character or not character.valid then
+    return
+  end
+  set_character_walking(character, false)
+  if character.commandable then
+    pcall(function()
+      character.commandable.set_command({ type = defines.command.stop })
+    end)
+  end
+end
+
+local function create_agent_character(surface, position)
+  local spawn_position = surface.find_non_colliding_position("character", position, 10, 0.5) or position
+  local character = surface.create_entity({
+    name = "character",
+    position = spawn_position,
+    force = game.forces.player
+  })
+  if character then
+    character.destructible = false
+  end
+  return character
+end
+
+local function agent_move_status(agent)
+  if not agent or not agent.move_goal or not agent.position then
+    return { active = false }
+  end
+  return {
+    active = true,
+    goal = position_table(agent.move_goal),
+    distance = round(distance(agent.position, agent.move_goal))
+  }
+end
+
+local function player_move_status(player)
+  if not player then
+    return { active = false }
+  end
+  local goals = storage.ai_player_move_goals or {}
+  local goal = goals[tostring(player.index)]
+  if not goal then
+    return { active = false }
+  end
+  return {
+    active = true,
+    goal = position_table(goal),
+    distance = round(distance(player.position, goal))
+  }
+end
+
+local function player_agent(player)
+  return {
+    kind = "player",
+    name = player.name,
+    player = player,
+    surface = player.surface,
+    force = player.force,
+    position = player.position,
+    inventory = player.get_main_inventory(),
+    character_valid = player.character ~= nil and player.character.valid or false,
+    move_status = player_move_status(player)
+  }
+end
+
 local function ensure_virtual_agent()
   storage.ai_agent = storage.ai_agent or {}
   local agent = storage.ai_agent
@@ -104,38 +238,100 @@ local function ensure_virtual_agent()
     agent.surface_name = surface.name
   end
   agent.surface_name = agent.surface_name or "nauvis"
+  local surface = game.get_surface(agent.surface_name) or game.surfaces[1]
+  if not agent.character or not agent.character.valid then
+    agent.character = create_agent_character(surface, agent.position)
+  end
+  if agent.character and agent.character.valid then
+    agent.position = { x = agent.character.position.x, y = agent.character.position.y }
+    agent.surface_name = agent.character.surface.name
+  end
   return {
     kind = "virtual",
     name = AGENT_NAME,
-    surface = game.get_surface(agent.surface_name) or game.surfaces[1],
+    surface = surface,
     force = game.forces.player,
     position = agent.position,
     inventory = agent.inventory,
-    character_valid = false
+    character = agent.character,
+    character_valid = agent.character ~= nil and agent.character.valid or false,
+    move_status = agent_move_status(agent)
   }
 end
 
-local function ensure_agent(command)
+local function configure_freeplay()
+  if not remote.interfaces or not remote.interfaces["freeplay"] then
+    return
+  end
+  local freeplay = remote.interfaces["freeplay"]
+  if freeplay["set_skip_intro"] then
+    pcall(remote.call, "freeplay", "set_skip_intro", true)
+  end
+  if freeplay["set_disable_crashsite"] then
+    pcall(remote.call, "freeplay", "set_disable_crashsite", true)
+  end
+end
+
+local function focus_player_on_agent(player)
+  if not player or not player.valid then
+    return
+  end
+  configure_freeplay()
+  if player.controller_type == defines.controllers.cutscene then
+    pcall(function()
+      player.exit_cutscene()
+    end)
+  end
+  local agent = ensure_virtual_agent()
+  local surface = agent.surface
+  if not surface then
+    return
+  end
+  local character = player.character
+  if not player.character or not player.character.valid then
+    character = surface.create_entity({
+      name = "character",
+      position = agent.position,
+      force = player.force or game.forces.player
+    })
+    if character then
+      player.character = character
+    end
+  end
+  if player.controller_type ~= defines.controllers.character and character and character.valid then
+    pcall(function()
+      player.set_controller({ type = defines.controllers.character, character = character })
+    end)
+  end
+  player.teleport(agent.position, surface)
+  player.force.chart(surface, {
+    { agent.position.x - 64, agent.position.y - 64 },
+    { agent.position.x + 64, agent.position.y + 64 }
+  })
+  if player.gui and player.gui.screen and player.gui.screen.skip_cutscene_label then
+    player.gui.screen.skip_cutscene_label.destroy()
+  end
+  player.print("[Factorio AI] Moved to the iron MVP factory. Check the burner drill and furnace nearby.")
+end
+
+local function ensure_agent(command, options)
+  options = options or {}
+  local requested_player_name = options.player_name
+  if type(requested_player_name) == "string" and requested_player_name ~= "" then
+    local requested_player = game.get_player(requested_player_name)
+    if requested_player then
+      return player_agent(requested_player)
+    end
+  end
+
   if command and command.player_index then
     local command_player = game.get_player(command.player_index)
     if command_player then
-      return {
-        kind = "player",
-        name = command_player.name,
-        player = command_player,
-        surface = command_player.surface,
-        force = command_player.force,
-        position = command_player.position,
-        inventory = command_player.get_main_inventory(),
-        character_valid = command_player.character ~= nil and command_player.character.valid or false
-      }
+      return player_agent(command_player)
     end
   end
 
   local player = game.get_player(AGENT_NAME)
-  if not player then
-    player = game.players[1]
-  end
   if not player then
     return ensure_virtual_agent()
   end
@@ -156,16 +352,7 @@ local function ensure_agent(command)
     player.teleport(spawn, surface)
   end
 
-  return {
-    kind = "player",
-    name = player.name,
-    player = player,
-    surface = player.surface,
-    force = player.force,
-    position = player.position,
-    inventory = player.get_main_inventory(),
-    character_valid = player.character ~= nil and player.character.valid or false
-  }
+  return player_agent(player)
 end
 
 local function main_inventory(agent)
@@ -219,13 +406,15 @@ local function collect_resources(surface, position)
       limit = 80
     })
     for _, entity in pairs(entities) do
-      table.insert(resources, {
-        unit_number = entity.unit_number,
-        name = entity.name,
-        amount = entity.amount,
-        position = position_table(entity.position),
-        distance = round(distance(position, entity.position))
-      })
+      if not entity.amount or entity.amount > 0 then
+        table.insert(resources, {
+          unit_number = entity.unit_number,
+          name = entity.name,
+          amount = entity.amount,
+          position = position_table(entity.position),
+          distance = round(distance(position, entity.position))
+        })
+      end
     end
   end
   table.sort(resources, function(a, b)
@@ -331,8 +520,8 @@ local function collect_craftable(agent)
   return craftable
 end
 
-local function observe(command)
-  local agent = ensure_agent(command)
+local function observe(command, options)
+  local agent = ensure_agent(command, options)
   local surface = agent.surface
   local position = agent.position
   local inventory = main_inventory(agent)
@@ -344,7 +533,8 @@ local function observe(command)
       kind = agent.kind,
       position = position_table(position),
       surface = surface.name,
-      character_valid = agent.character_valid
+      character_valid = agent.character_valid,
+      move = agent.move_status or { active = false }
     },
     inventory = inventory_contents(inventory),
     craftable = collect_craftable(agent),
@@ -377,6 +567,13 @@ local function find_resource(surface, action)
     name = action.name,
     limit = 32
   })
+  local available = {}
+  for _, entity in pairs(found) do
+    if not entity.amount or entity.amount > 0 then
+      table.insert(available, entity)
+    end
+  end
+  found = available
   table.sort(found, function(a, b)
     return distance(center, a.position) < distance(center, b.position)
   end)
@@ -413,16 +610,50 @@ local function action_move_to(agent, action)
     return result_err("move_to target is too far", { max_distance = max_distance })
   end
   if agent.kind == "virtual" then
-    storage.ai_agent.position = { x = position.x, y = position.y }
-    agent.position = storage.ai_agent.position
+    storage.ai_agent.surface_name = agent.surface.name
+    storage.ai_agent.move_goal = { x = position.x, y = position.y }
+    if distance(agent.position, position) <= MOVE_STOP_DISTANCE then
+      storage.ai_agent.move_goal = nil
+      stop_character_command(storage.ai_agent.character)
+      return result_ok({
+        action = "move_to",
+        status = "arrived",
+        position = position_table(agent.position),
+        target = position_table(position)
+      })
+    end
+    return result_ok({
+      action = "move_to",
+      status = "moving",
+      position = position_table(agent.position),
+      target = position_table(position),
+      distance = round(distance(agent.position, position))
+    })
   else
-    local ok = agent.player.teleport(position, agent.surface)
+    storage.ai_player_move_goals = storage.ai_player_move_goals or {}
+    storage.ai_player_move_goals[tostring(agent.player.index)] = { x = position.x, y = position.y }
+    if distance(agent.position, position) <= MOVE_STOP_DISTANCE then
+      set_character_walking(agent.player, false)
+      storage.ai_player_move_goals[tostring(agent.player.index)] = nil
+      return result_ok({ action = "move_to", status = "arrived", position = position_table(agent.position) })
+    end
+    local ok, err = set_character_walking(
+      agent.player,
+      true,
+      walking_direction(position.x - agent.position.x, position.y - agent.position.y)
+    )
     if not ok then
-      return result_err("teleport failed")
+      return result_err("walking_state failed", { error = err })
     end
     agent.position = agent.player.position
+    return result_ok({
+      action = "move_to",
+      status = "moving",
+      position = position_table(agent.position),
+      target = position_table(position),
+      distance = round(distance(agent.position, position))
+    })
   end
-  return result_ok({ action = "move_to", position = position_table(agent.position) })
 end
 
 local function action_mine(agent, action)
@@ -450,9 +681,11 @@ local function action_mine(agent, action)
       return result_err("inventory did not accept mined resource", { resource = target.name })
     end
     if target.valid and target.amount then
-      target.amount = math.max(0, target.amount - inserted)
-      if target.amount <= 0 and target.valid then
+      local remaining = target.amount - inserted
+      if remaining <= 0 and target.valid then
         target.destroy({ raise_destroy = true })
+      elseif target.valid then
+        target.amount = remaining
       end
     end
     return result_ok({ action = "mine", mined = inserted, inventory = inventory_contents(inventory) })
@@ -661,6 +894,94 @@ local function action_take(agent, action)
   })
 end
 
+local function update_virtual_agent_movement()
+  local agent = storage.ai_agent
+  if not agent or not agent.move_goal then
+    return
+  end
+  local surface = game.get_surface(agent.surface_name or "nauvis") or game.surfaces[1]
+  if not surface then
+    return
+  end
+  if not agent.character or not agent.character.valid then
+    agent.character = create_agent_character(surface, agent.position or agent.move_goal)
+  end
+  local character = agent.character
+  if not character or not character.valid then
+    agent.last_move_error = "agent character is not valid"
+    return
+  end
+
+  agent.position = { x = character.position.x, y = character.position.y }
+  agent.surface_name = character.surface.name
+
+  local remaining = distance(agent.position, agent.move_goal)
+  if remaining <= MOVE_STOP_DISTANCE then
+    agent.move_goal = nil
+    agent.last_move_error = nil
+    stop_character_command(character)
+    return
+  end
+  local dx = agent.move_goal.x - agent.position.x
+  local dy = agent.move_goal.y - agent.position.y
+  local step = math.min(PLAYER_MOVE_STEP, remaining)
+  local next_position = {
+    x = agent.position.x + dx / remaining * step,
+    y = agent.position.y + dy / remaining * step
+  }
+  local ok, moved = pcall(function()
+    return character.teleport(next_position, surface)
+  end)
+  if not ok or moved == false then
+    agent.last_move_error = "agent character teleport step failed"
+    agent.move_goal = nil
+    stop_character_command(character)
+    return
+  end
+  agent.position = { x = character.position.x, y = character.position.y }
+  set_character_walking(character, true, walking_direction(dx, dy))
+end
+
+local function update_player_agent_movement()
+  local goals = storage.ai_player_move_goals
+  if not goals then
+    return
+  end
+  for index, goal in pairs(goals) do
+    local player = game.get_player(tonumber(index))
+    if not player or not player.valid or not player.character or not player.character.valid then
+      goals[index] = nil
+    else
+      local remaining = distance(player.position, goal)
+      if remaining <= MOVE_STOP_DISTANCE then
+        goals[index] = nil
+        set_character_walking(player, false)
+      else
+        local dx = goal.x - player.position.x
+        local dy = goal.y - player.position.y
+        local step = math.min(PLAYER_MOVE_STEP, remaining)
+        local next_position = {
+          x = player.position.x + dx / remaining * step,
+          y = player.position.y + dy / remaining * step
+        }
+        local ok, moved = pcall(function()
+          return player.teleport(next_position, player.surface)
+        end)
+        if not ok or moved == false then
+          goals[index] = nil
+          set_character_walking(player, false)
+        else
+          set_character_walking(
+            player,
+            true,
+            walking_direction(dx, dy)
+          )
+        end
+      end
+    end
+  end
+end
+
 local function execute_action(command, action)
   if type(action) ~= "table" then
     return result_err("action payload must be a json object")
@@ -669,7 +990,7 @@ local function execute_action(command, action)
   if type(action_type) ~= "string" then
     return result_err("action.type is required")
   end
-  local agent = ensure_agent(command)
+  local agent = ensure_agent(command, action)
   if action_type == "move_to" then
     return action_move_to(agent, action)
   elseif action_type == "mine" then
@@ -688,9 +1009,33 @@ local function execute_action(command, action)
   return result_err("unsupported action type", { action_type = action_type })
 end
 
+script.on_init(function()
+  configure_freeplay()
+end)
+
+script.on_configuration_changed(function()
+  configure_freeplay()
+end)
+
+script.on_event(defines.events.on_tick, function()
+  update_virtual_agent_movement()
+  update_player_agent_movement()
+end)
+
+script.on_event(defines.events.on_player_created, function(event)
+  local player = game.get_player(event.player_index)
+  focus_player_on_agent(player)
+end)
+
+script.on_event(defines.events.on_player_joined_game, function(event)
+  local player = game.get_player(event.player_index)
+  focus_player_on_agent(player)
+end)
+
 commands.add_command("ai_observe", "Return Factorio AI observation JSON.", function(command)
   local ok, payload = pcall(function()
-    return observe(command)
+    local options = json_decode(command.parameter) or {}
+    return observe(command, options)
   end)
   if ok then
     reply(command, payload)

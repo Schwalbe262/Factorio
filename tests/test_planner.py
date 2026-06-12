@@ -1,6 +1,6 @@
 import unittest
 
-from factorio_ai.planner import IronPlateSkill
+from factorio_ai.planner import AutomationScienceSkill, IronPlateSkill
 
 
 def base_observation():
@@ -34,6 +34,15 @@ class PlannerTests(unittest.TestCase):
         self.assertFalse(decision.done)
         self.assertEqual(decision.action["type"], "build")
         self.assertEqual(decision.action["name"], "burner-mining-drill")
+        self.assertTrue(decision.action["allow_nearby"])
+
+    def test_moves_next_to_ore_before_building_distant_drill(self):
+        obs = base_observation()
+        obs["resources"][0]["position"] = {"x": 100, "y": 0}
+        obs["resources"][0]["distance"] = 100
+        decision = IronPlateSkill(target_count=10).next_action(obs)
+        self.assertEqual(decision.action["type"], "move_to")
+        self.assertEqual(decision.action["position"], {"x": 102.0, "y": 0.0})
 
     def test_mines_ore_when_drill_and_furnace_exist(self):
         obs = base_observation()
@@ -57,6 +66,39 @@ class PlannerTests(unittest.TestCase):
         decision = IronPlateSkill(target_count=10).next_action(obs)
         self.assertEqual(decision.action["type"], "mine")
         self.assertEqual(decision.action["name"], "iron-ore")
+
+    def test_science_skill_crafts_science_when_prerequisites_exist(self):
+        obs = base_observation()
+        obs["inventory"] = {
+            "iron-plate": 10,
+            "iron-gear-wheel": 1,
+            "copper-plate": 1,
+        }
+        obs["craftable"] = {"automation-science-pack": 1}
+        decision = AutomationScienceSkill(target_count=1).next_action(obs)
+        self.assertEqual(decision.action["type"], "craft")
+        self.assertEqual(decision.action["recipe"], "automation-science-pack")
+
+    def test_science_skill_builds_second_furnace_for_copper(self):
+        obs = base_observation()
+        obs["inventory"] = {
+            "iron-plate": 10,
+            "stone-furnace": 1,
+            "coal": 8,
+        }
+        obs["resources"].append({"name": "copper-ore", "position": {"x": 8, "y": 0}, "distance": 8})
+        obs["entities"] = [
+            {
+                "name": "stone-furnace",
+                "unit_number": 201,
+                "position": {"x": 4, "y": 0},
+                "distance": 4,
+                "inventories": {"2": {"iron-plate": 1}},
+            }
+        ]
+        decision = AutomationScienceSkill(target_count=1).next_action(obs)
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "stone-furnace")
 
 
 if __name__ == "__main__":
