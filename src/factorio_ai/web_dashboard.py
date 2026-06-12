@@ -10,7 +10,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
 from .config import AppConfig
 from .controller import FactorioController
-from .item_icons import resolve_item_icon
+from .item_icons import read_item_icon_png
 from .monitor import summarize_factory
 from .networking import dashboard_urls
 from .skill_registry import annotate_strategy_with_skill_status
@@ -25,6 +25,7 @@ ICON_ROUTE_PREFIX = "/factorio/icon/"
 API_ROUTE = "/api/factorio"
 DEFAULT_LANG = "en"
 SUPPORTED_LANGS = {"en", "ko"}
+DEFAULT_PUBLIC_DASHBOARD_BASE_URL = "http://27.115.156.173:8787"
 
 
 TEXT: dict[str, dict[str, str]] = {
@@ -180,11 +181,11 @@ def make_dashboard_handler(cfg: AppConfig, default_objective: str) -> type[BaseH
 
             if path.startswith(ICON_ROUTE_PREFIX):
                 item_name = path[len(ICON_ROUTE_PREFIX) :].removesuffix(".png")
-                icon_path = resolve_item_icon(cfg, item_name)
-                if icon_path is None:
+                icon = read_item_icon_png(cfg, item_name)
+                if icon is None:
                     self._send(404, b"icon not found\n", "text/plain; charset=utf-8")
                     return
-                self._send(200, icon_path.read_bytes(), "image/png")
+                self._send(200, icon, "image/png")
                 return
 
             self._send(404, b"not found\n", "text/plain; charset=utf-8")
@@ -240,7 +241,12 @@ def dashboard_path(lang: str = DEFAULT_LANG, objective: str | None = None) -> st
 
 def public_dashboard_urls(host: str, port: int, lang: str = DEFAULT_LANG) -> list[str]:
     route = dashboard_path(lang)
-    return dashboard_urls(host, port, route, base_url=os.getenv("FACTORIO_AI_WEB_BASE_URL"))
+    base_url = (
+        os.getenv("FACTORIO_AI_WEB_BASE_URL")
+        or os.getenv("FACTORIO_DASHBOARD_BASE_URL")
+        or DEFAULT_PUBLIC_DASHBOARD_BASE_URL
+    )
+    return dashboard_urls(host, port, route, base_url=base_url)
 
 
 def build_dashboard_state(cfg: AppConfig, objective: str) -> dict[str, Any]:

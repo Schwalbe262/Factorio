@@ -110,11 +110,11 @@ Start the local production monitor:
 factorio-ai web
 ```
 
-The command binds to `0.0.0.0` by default and prints the reachable LAN URL. Open the URL it prints,
+The command binds to `0.0.0.0` by default and prints the reachable public gateway URL. Open the URL it prints,
 for example:
 
 ```text
-http://<LAN-IP>:18889/factorio
+http://27.115.156.173:8787/factorio
 ```
 
 `/factorio` is the canonical route. `/팩토리오` redirects to `/factorio?lang=ko`.
