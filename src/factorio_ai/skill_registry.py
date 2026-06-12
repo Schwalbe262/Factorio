@@ -14,6 +14,7 @@ IMPLEMENTED_SKILLS = {
     "produce_electronic_circuit": "ElectronicCircuitSkill",
     "build_belt_smelting_line": "BeltSmeltingLineSkill",
     "setup_power": "SetupPowerSkill",
+    "research_automation": "ResearchAutomationSkill",
 }
 
 

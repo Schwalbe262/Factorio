@@ -16,7 +16,15 @@ from .models import (
     total_item_count,
     validate_action,
 )
-from .planner import AutomationScienceSkill, BeltSmeltingLineSkill, CopperPlateSkill, ElectronicCircuitSkill, IronPlateSkill, SetupPowerSkill
+from .planner import (
+    AutomationScienceSkill,
+    BeltSmeltingLineSkill,
+    CopperPlateSkill,
+    ElectronicCircuitSkill,
+    IronPlateSkill,
+    ResearchAutomationSkill,
+    SetupPowerSkill,
+)
 from .rcon import FactorioRconClient
 from .skill_registry import annotate_strategy_with_skill_status
 from .strategy import heuristic_strategy, make_strategy_payload, skill_catalog_payload
@@ -194,6 +202,21 @@ class FactorioController:
             log_path=log_path,
         )
 
+    def run_automation_research_mvp(
+        self,
+        max_steps: int = 1500,
+        log_path: Path | None = None,
+    ) -> RunSummary:
+        return self._run_skill(
+            skill=ResearchAutomationSkill(),
+            target_item="automation-science-pack",
+            target=10,
+            goal="research_automation",
+            max_steps=max_steps,
+            log_prefix="automation-research-mvp",
+            log_path=log_path,
+        )
+
     def strategy_decision(self, objective: str, require_llm: bool = False) -> dict[str, Any]:
         observation = self.observe()
         production_targets = load_targets(self.cfg.runtime_dir, objective).per_minute
@@ -331,6 +354,15 @@ class FactorioController:
                 "goal": skill_name,
                 "max_steps": max_steps or 900,
                 "log_prefix": "strategy-power",
+            }
+        if skill_name == "research_automation":
+            return {
+                "skill": ResearchAutomationSkill(),
+                "target_item": "automation-science-pack",
+                "target": 10,
+                "goal": skill_name,
+                "max_steps": max_steps or 1500,
+                "log_prefix": "strategy-automation-research",
             }
         return None
 

@@ -15,7 +15,7 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(result["selected_skill"], "expand_iron_smelting")
         self.assertIn("iron plate throughput", result["blockers"])
 
-    def test_rocket_goal_starts_with_red_science_after_iron(self):
+    def test_rocket_goal_researches_automation_after_iron(self):
         result = heuristic_strategy(
             "launch_rocket_program",
             {
@@ -23,7 +23,22 @@ class StrategyTests(unittest.TestCase):
                 "entities": [],
             },
         )
-        self.assertEqual(result["selected_skill"], "produce_automation_science_pack")
+        self.assertEqual(result["selected_skill"], "research_automation")
+
+    def test_rocket_goal_requests_next_executor_after_automation_researched(self):
+        result = heuristic_strategy(
+            "launch_rocket_program",
+            {
+                "inventory": {"iron-plate": 20},
+                "entities": [],
+                "research": {
+                    "technologies": {
+                        "automation": {"researched": True},
+                    },
+                },
+            },
+        )
+        self.assertEqual(result["selected_skill"], "automate_electronic_circuit_line")
 
     def test_normalize_rejects_unknown_skill(self):
         result = normalize_strategy_response({"selected_skill": "teleport_to_rocket", "priority": 100})
@@ -33,6 +48,7 @@ class StrategyTests(unittest.TestCase):
         catalog = skill_catalog_payload()
         self.assertTrue(any(item["name"] == "produce_electronic_circuit" for item in catalog))
         self.assertTrue(any(item["name"] == "build_belt_smelting_line" for item in catalog))
+        self.assertTrue(any(item["name"] == "research_automation" for item in catalog))
         self.assertTrue(any(item["name"] == "automate_electronic_circuit_line" for item in catalog))
         self.assertTrue(any(item["name"] == "build_rail_supply_line" for item in catalog))
         self.assertEqual(

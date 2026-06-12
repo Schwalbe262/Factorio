@@ -3,6 +3,8 @@ local AGENT_NAME = "AI"
 local OBSERVE_RADIUS = 512
 local POWER_SITE_RADIUS = 512
 local POWER_SITE_WATER_TILE_LIMIT = 1200
+local LAB_SITE_RADIUS = 96
+local POLE_WIRE_REACH = 9
 local MOVE_STOP_DISTANCE = 0.35
 local PLAYER_MOVE_STEP = 0.10
 
@@ -63,7 +65,28 @@ local VIRTUAL_RECIPES = {
   ["automation-science-pack"] = {
     ingredients = { ["copper-plate"] = 1, ["iron-gear-wheel"] = 1 },
     results = { ["automation-science-pack"] = 1 }
+  },
+  ["lab"] = {
+    ingredients = { ["electronic-circuit"] = 10, ["iron-gear-wheel"] = 10, ["transport-belt"] = 4 },
+    results = { ["lab"] = 1 }
+  },
+  ["assembling-machine-1"] = {
+    ingredients = { ["electronic-circuit"] = 3, ["iron-gear-wheel"] = 5, ["iron-plate"] = 9 },
+    results = { ["assembling-machine-1"] = 1 }
   }
+}
+
+local WATCHED_TECHNOLOGIES = {
+  "steam-power",
+  "electronics",
+  "automation-science-pack",
+  "automation",
+  "logistics",
+  "steel-processing",
+  "automation-2",
+  "railway",
+  "oil-processing",
+  "rocket-silo"
 }
 
 local function json_encode(value)
@@ -469,6 +492,32 @@ local function optional_entity_position(entity, property)
   return nil
 end
 
+local function entity_recipe_name(entity)
+  if not entity or not entity.valid then
+    return nil
+  end
+  local ok, recipe = pcall(function()
+    return entity.get_recipe()
+  end)
+  if ok and recipe and recipe.name then
+    return recipe.name
+  end
+  return nil
+end
+
+local function entity_connected_to_electric_network(entity)
+  if not entity or not entity.valid then
+    return nil
+  end
+  local ok, connected = pcall(function()
+    return entity.is_connected_to_electric_network()
+  end)
+  if ok then
+    return connected
+  end
+  return nil
+end
+
 local function collect_resources(surface, position)
   local resources = {}
   local resource_names = { "iron-ore", "coal", "stone", "copper-ore", "uranium-ore", "crude-oil" }
@@ -506,6 +555,8 @@ local function entity_snapshot(entity, position)
     position = position_table(entity.position),
     direction = entity.direction,
     status = entity.status,
+    recipe = entity_recipe_name(entity),
+    electric_network_connected = entity_connected_to_electric_network(entity),
     drop_position = optional_entity_position(entity, "drop_position"),
     pickup_position = optional_entity_position(entity, "pickup_position"),
     distance = round(distance(position, entity.position)),
@@ -654,6 +705,238 @@ local function collect_power_sites(surface, position, force)
   return sites
 end
 
+local function technology_research_unit_ingredients(technology)
+  local ingredients = {}
+  local ok, raw = pcall(function()
+    return technology.research_unit_ingredients
+  end)
+  if not ok or not raw then
+    return ingredients
+  end
+  for _, ingredient in pairs(raw) do
+    local name = ingredient.name or ingredient[1]
+    local amount = ingredient.amount or ingredient[2]
+    if name and amount then
+      ingredients[name] = amount
+    end
+  end
+  return ingredients
+end
+
+local function technology_snapshot(technology)
+  if not technology or not technology.valid then
+    return nil
+  end
+  local unit_count = nil
+  local unit_energy = nil
+  pcall(function()
+    unit_count = technology.research_unit_count
+  end)
+  pcall(function()
+    unit_energy = technology.research_unit_energy
+  end)
+  return {
+    name = technology.name,
+    researched = technology.researched,
+    enabled = technology.enabled,
+    research_unit_count = unit_count,
+    research_unit_energy = unit_energy,
+    ingredients = technology_research_unit_ingredients(technology)
+  }
+end
+
+local function collect_research(force)
+  local current = nil
+  local progress = nil
+  local queue = {}
+  local ok_current, current_research = pcall(function()
+    return force.current_research
+  end)
+  if ok_current and current_research then
+    current = current_research.name
+    pcall(function()
+      progress = force.research_progress
+    end)
+  end
+  pcall(function()
+    for _, technology in pairs(force.research_queue) do
+      if technology.name then
+        table.insert(queue, technology.name)
+      else
+        table.insert(queue, tostring(technology))
+      end
+    end
+  end)
+
+  local technologies = {}
+  for _, name in pairs(WATCHED_TECHNOLOGIES) do
+    local technology = force.technologies[name]
+    local snapshot = technology_snapshot(technology)
+    if snapshot then
+      technologies[name] = snapshot
+    end
+  end
+
+  return {
+    current = current,
+    progress = progress,
+    queue = queue,
+    technologies = technologies
+  }
+end
+
+local function research_queue_contains(force, technology_name)
+  local found = false
+  pcall(function()
+    for _, technology in pairs(force.research_queue or {}) do
+      local name = technology.name or tostring(technology)
+      if name == technology_name then
+        found = true
+      end
+    end
+  end)
+  return found
+end
+
+local function research_target_selected(force, technology_name)
+  local selected = research_queue_contains(force, technology_name)
+  pcall(function()
+    local current = force.current_research
+    if current and current.name == technology_name then
+      selected = true
+    end
+  end)
+  return selected
+end
+
+local function technology_has_research_packs(technology)
+  return next(technology_research_unit_ingredients(technology)) ~= nil
+end
+
+local function unlock_virtual_trigger_prerequisites(force, technology, visited)
+  if not technology then
+    return
+  end
+  visited = visited or {}
+  if visited[technology.name] then
+    return
+  end
+  visited[technology.name] = true
+  local ok, prerequisites = pcall(function()
+    return technology.prerequisites
+  end)
+  if not ok or not prerequisites then
+    return
+  end
+  for prerequisite, _ in pairs(prerequisites) do
+    local prerequisite_technology = prerequisite
+    if type(prerequisite_technology) == "string" then
+      prerequisite_technology = force.technologies[prerequisite_technology]
+    end
+    if prerequisite_technology then
+      unlock_virtual_trigger_prerequisites(force, prerequisite_technology, visited)
+      if not prerequisite_technology.researched and not technology_has_research_packs(prerequisite_technology) then
+        pcall(function()
+          prerequisite_technology.researched = true
+        end)
+      end
+    end
+  end
+end
+
+local function add_lab_site(sites, checked, surface, force, pole, pole_position, lab_position, source_pole)
+  if not can_place_manual(surface, force, "lab", lab_position, defines.direction.north) then
+    return
+  end
+  local key = tostring(round(pole_position.x)) .. "," .. tostring(round(pole_position.y)) .. ":"
+    .. tostring(round(lab_position.x)) .. "," .. tostring(round(lab_position.y))
+  if checked[key] then
+    return
+  end
+  checked[key] = true
+  local site = {
+    pole_position = position_table(pole_position),
+    lab_position = position_table(lab_position),
+    distance = round(distance(source_pole.position, lab_position)),
+    powered = entity_connected_to_electric_network(source_pole)
+  }
+  if pole and pole.valid then
+    site.pole_unit_number = pole.unit_number
+  else
+    site.source_pole_unit_number = source_pole.unit_number
+  end
+  table.insert(sites, site)
+end
+
+local function add_lab_sites_around_pole(sites, checked, surface, force, pole, pole_position, source_pole)
+  for dx = -4, 4 do
+    for dy = -4, 4 do
+      local lab_position = { x = pole_position.x + dx, y = pole_position.y + dy }
+      if distance(pole_position, lab_position) <= 5.5 then
+        add_lab_site(sites, checked, surface, force, pole, pole_position, lab_position, source_pole)
+        if #sites >= 40 then
+          return
+        end
+      end
+    end
+  end
+end
+
+local function collect_lab_sites(surface, position, force)
+  local sites = {}
+  local checked = {}
+  local poles = surface.find_entities_filtered({
+    position = position,
+    radius = OBSERVE_RADIUS,
+    name = "small-electric-pole",
+    limit = 80
+  })
+  table.sort(poles, function(a, b)
+    local ap = entity_connected_to_electric_network(a) and 0 or 1
+    local bp = entity_connected_to_electric_network(b) and 0 or 1
+    if ap ~= bp then
+      return ap < bp
+    end
+    return distance(position, a.position) < distance(position, b.position)
+  end)
+
+  for _, source_pole in pairs(poles) do
+    if source_pole.valid then
+      local source_position = { x = source_pole.position.x, y = source_pole.position.y }
+      add_lab_sites_around_pole(sites, checked, surface, force, source_pole, source_position, source_pole)
+      if #sites >= 40 then
+        break
+      end
+      for dx = -7, 7 do
+        for dy = -7, 7 do
+          local pole_position = { x = source_pole.position.x + dx, y = source_pole.position.y + dy }
+          if distance(source_pole.position, pole_position) <= POLE_WIRE_REACH
+            and distance(position, pole_position) <= LAB_SITE_RADIUS
+            and can_place_manual(surface, force, "small-electric-pole", pole_position, defines.direction.north) then
+            add_lab_sites_around_pole(sites, checked, surface, force, nil, pole_position, source_pole)
+            if #sites >= 40 then
+              break
+            end
+          end
+        end
+        if #sites >= 40 then
+          break
+        end
+      end
+    end
+    if #sites >= 40 then
+      break
+    end
+  end
+  table.sort(sites, function(a, b)
+    if a.powered ~= b.powered then
+      return a.powered == true
+    end
+    return (a.distance or 999999) < (b.distance or 999999)
+  end)
+  return sites
+end
+
 local function virtual_craftable(agent)
   local craftable = {}
   local inventory = main_inventory(agent)
@@ -708,7 +991,9 @@ local function observe(command, options)
     craftable = collect_craftable(agent),
     resources = collect_resources(surface, position),
     entities = collect_entities(surface, position),
-    power_sites = collect_power_sites(surface, position, agent.force)
+    power_sites = collect_power_sites(surface, position, agent.force),
+    lab_sites = collect_lab_sites(surface, position, agent.force),
+    research = collect_research(agent.force)
   })
   return response
 end
@@ -921,6 +1206,67 @@ local function action_craft(agent, action)
   return result_ok({ action = "craft", recipe = action.recipe, started = started })
 end
 
+local function connect_pole_to_neighbours(surface, pole)
+  if not pole or not pole.valid or pole.name ~= "small-electric-pole" then
+    return 0
+  end
+  local ok_connector, connector = pcall(function()
+    return pole.get_wire_connector(defines.wire_connector_id.pole_copper, true)
+  end)
+  if not ok_connector or not connector then
+    return 0
+  end
+
+  local connected = 0
+  local neighbours = surface.find_entities_filtered({
+    position = pole.position,
+    radius = POLE_WIRE_REACH,
+    name = "small-electric-pole",
+    limit = 16
+  })
+  table.sort(neighbours, function(a, b)
+    return distance(pole.position, a.position) < distance(pole.position, b.position)
+  end)
+
+  for _, other in pairs(neighbours) do
+    if other.valid and other.unit_number ~= pole.unit_number and distance(pole.position, other.position) <= POLE_WIRE_REACH then
+      local ok_other, other_connector = pcall(function()
+        return other.get_wire_connector(defines.wire_connector_id.pole_copper, true)
+      end)
+      if ok_other and other_connector then
+        local already = false
+        pcall(function()
+          already = connector.is_connected_to(other_connector, defines.wire_origin.script)
+        end)
+          if not already then
+            local ok_connect, made = pcall(function()
+              return connector.connect_to(other_connector, true, defines.wire_origin.script)
+            end)
+            if not ok_connect then
+              ok_connect, made = pcall(function()
+                return connector.connect_to(other_connector, false, defines.wire_origin.script)
+              end)
+            end
+            if not ok_connect then
+              ok_connect, made = pcall(function()
+                return connector.connect_to(other_connector, defines.wire_origin.script)
+              end)
+            end
+            if not ok_connect then
+              ok_connect, made = pcall(function()
+                return connector.connect_to(other_connector)
+              end)
+            end
+            if ok_connect and made ~= false then
+              connected = connected + 1
+            end
+        end
+      end
+    end
+  end
+  return connected
+end
+
 local function action_build(agent, action)
   if type(action.name) ~= "string" then
     return result_err("build requires entity/item name")
@@ -995,12 +1341,75 @@ local function action_build(agent, action)
     inventory.insert({ name = action.name, count = 1 })
     return result_err("create_entity failed", { name = action.name })
   end
+  local connected_wires = connect_pole_to_neighbours(surface, entity)
   return result_ok({
     action = "build",
     name = entity.name,
     unit_number = entity.unit_number,
-    position = position_table(entity.position)
+    position = position_table(entity.position),
+    connected_wires = connected_wires
   })
+end
+
+local function action_research(agent, action)
+  if type(action.technology) ~= "string" then
+    return result_err("research requires technology")
+  end
+  local technology = agent.force.technologies[action.technology]
+  if not technology then
+    return result_err("technology not found", { technology = action.technology })
+  end
+  if technology.researched then
+    return result_ok({ action = "research", technology = technology.name, researched = true })
+  end
+  if not technology.enabled then
+    return result_err("technology is not enabled", { technology = technology.name })
+  end
+  unlock_virtual_trigger_prerequisites(agent.force, technology)
+  if not technology_has_research_packs(technology) then
+    local ok_unlock = pcall(function()
+      technology.researched = true
+    end)
+    if ok_unlock then
+      return result_ok({ action = "research", technology = technology.name, researched = true, virtual_trigger = true })
+    end
+  end
+  pcall(function()
+    agent.force.research_queue_enabled = true
+  end)
+  local ok = pcall(function()
+    agent.force.research_queue = { technology.name }
+  end)
+  if ok and not research_target_selected(agent.force, technology.name) then
+    ok = pcall(function()
+      agent.force.research_queue = { technology }
+    end)
+  end
+  if ok and not research_target_selected(agent.force, technology.name) then
+    ok = false
+  end
+  if not ok then
+    pcall(function()
+      local current = agent.force.current_research
+      if current and current.name ~= technology.name then
+        agent.force.cancel_current_research()
+      end
+    end)
+    local added
+    ok, added = pcall(function()
+      return agent.force.add_research(technology.name)
+    end)
+    if ok and added == false then
+      ok = false
+    end
+  end
+  if ok and not research_target_selected(agent.force, technology.name) then
+    ok = false
+  end
+  if not ok then
+    return result_err("setting research failed", { technology = technology.name })
+  end
+  return result_ok({ action = "research", technology = technology.name, current_research = technology.name })
 end
 
 local function action_insert(agent, action)
@@ -1174,6 +1583,8 @@ local function execute_action(command, action)
     return action_insert(agent, action)
   elseif action_type == "take" then
     return action_take(agent, action)
+  elseif action_type == "research" then
+    return action_research(agent, action)
   elseif action_type == "wait" then
     return result_ok({ action = "wait", ticks = action.ticks or 60, target_tick = game.tick + (action.ticks or 60) })
   end

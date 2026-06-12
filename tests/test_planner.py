@@ -6,6 +6,7 @@ from factorio_ai.planner import (
     CopperPlateSkill,
     ElectronicCircuitSkill,
     IronPlateSkill,
+    ResearchAutomationSkill,
     SetupPowerSkill,
 )
 
@@ -26,6 +27,18 @@ def base_observation():
             {"name": "coal", "position": {"x": 2, "y": 0}, "distance": 2},
         ],
         "entities": [],
+        "research": {
+            "current": None,
+            "progress": 0.0,
+            "technologies": {
+                "automation": {
+                    "researched": False,
+                    "enabled": True,
+                    "research_unit_count": 10,
+                    "ingredients": {"automation-science-pack": 1},
+                }
+            },
+        },
     }
 
 
@@ -497,6 +510,143 @@ class PlannerTests(unittest.TestCase):
         decision = SetupPowerSkill().next_action(obs)
         self.assertTrue(decision.done)
         self.assertIsNone(decision.action)
+
+    def test_research_automation_done_when_technology_researched(self):
+        obs = powered_research_observation()
+        obs["research"]["technologies"]["automation"]["researched"] = True
+        decision = ResearchAutomationSkill().next_action(obs)
+        self.assertTrue(decision.done)
+        self.assertIsNone(decision.action)
+
+    def test_research_automation_sets_current_research_after_power(self):
+        obs = powered_research_observation()
+        decision = ResearchAutomationSkill().next_action(obs)
+        self.assertEqual(decision.action["type"], "research")
+        self.assertEqual(decision.action["technology"], "automation")
+
+    def test_research_automation_builds_lab_when_item_and_site_exist(self):
+        obs = powered_research_observation()
+        obs["research"]["current"] = "automation"
+        obs["inventory"]["lab"] = 1
+        obs["lab_sites"] = [
+            {
+                "powered": True,
+                "pole_unit_number": 604,
+                "pole_position": {"x": 10.5, "y": 6.5},
+                "lab_position": {"x": 13.5, "y": 6.5},
+                "distance": 3,
+            }
+        ]
+        decision = ResearchAutomationSkill().next_action(obs)
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "lab")
+
+    def test_research_automation_does_not_build_lab_until_circuits_are_ready(self):
+        obs = powered_research_observation()
+        obs["research"]["current"] = "automation"
+        obs["inventory"].update(
+            {
+                "electronic-circuit": 2,
+                "iron-gear-wheel": 10,
+                "transport-belt": 4,
+            }
+        )
+        obs["lab_sites"] = [
+            {
+                "powered": True,
+                "pole_unit_number": 604,
+                "pole_position": {"x": 10.5, "y": 6.5},
+                "lab_position": {"x": 13.5, "y": 6.5},
+                "distance": 3,
+            }
+        ]
+        decision = ResearchAutomationSkill().next_action(obs)
+        self.assertNotEqual(decision.action and decision.action.get("name"), "lab")
+
+    def test_research_automation_extends_pole_before_lab_when_needed(self):
+        obs = powered_research_observation()
+        obs["research"]["current"] = "automation"
+        obs["inventory"]["lab"] = 1
+        obs["inventory"]["small-electric-pole"] = 1
+        obs["lab_sites"] = [
+            {
+                "powered": True,
+                "source_pole_unit_number": 604,
+                "pole_position": {"x": 15.5, "y": 6.5},
+                "lab_position": {"x": 18.5, "y": 6.5},
+                "distance": 8,
+            }
+        ]
+        decision = ResearchAutomationSkill().next_action(obs)
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "small-electric-pole")
+
+    def test_research_automation_inserts_science_into_lab(self):
+        obs = powered_research_observation()
+        obs["research"]["current"] = "automation"
+        obs["inventory"]["automation-science-pack"] = 10
+        obs["entities"].append(
+            {
+                "name": "lab",
+                "unit_number": 701,
+                "position": {"x": 13.5, "y": 6.5},
+                "distance": 5,
+                "electric_network_connected": True,
+                "inventories": {},
+            }
+        )
+        decision = ResearchAutomationSkill().next_action(obs)
+        self.assertEqual(decision.action["type"], "insert")
+        self.assertEqual(decision.action["item"], "automation-science-pack")
+
+
+def powered_research_observation():
+    obs = base_observation()
+    obs["inventory"] = {"coal": 10}
+    obs["entities"] = [
+        {
+            "name": "offshore-pump",
+            "unit_number": 601,
+            "position": {"x": 10.5, "y": 10.5},
+            "direction": 12,
+            "distance": 10,
+            "inventories": {},
+            "fluids": {"1": {"name": "water", "amount": 100}},
+        },
+        {
+            "name": "boiler",
+            "unit_number": 602,
+            "position": {"x": 12.5, "y": 10},
+            "direction": 0,
+            "distance": 12,
+            "inventories": {"1": {"coal": 5}},
+            "fluids": {
+                "1": {"name": "water", "amount": 200},
+                "2": {"name": "steam", "amount": 20},
+            },
+        },
+        {
+            "name": "steam-engine",
+            "unit_number": 603,
+            "position": {"x": 12.5, "y": 6.5},
+            "direction": 0,
+            "status": 1,
+            "distance": 13,
+            "inventories": {},
+            "fluids": {"1": {"name": "steam", "amount": 80}},
+        },
+        {
+            "name": "small-electric-pole",
+            "unit_number": 604,
+            "position": {"x": 10.5, "y": 6.5},
+            "direction": 0,
+            "distance": 12,
+            "electric_network_connected": True,
+            "inventories": {},
+            "fluids": {},
+        },
+    ]
+    return obs
 
 
 if __name__ == "__main__":

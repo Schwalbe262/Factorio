@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 
-ALLOWED_ACTION_TYPES = {"move_to", "mine", "craft", "build", "insert", "take", "wait"}
+ALLOWED_ACTION_TYPES = {"move_to", "mine", "craft", "build", "insert", "take", "research", "wait"}
 
 
 class ActionValidationError(ValueError):
@@ -41,6 +41,8 @@ def validate_action(action: dict[str, Any]) -> dict[str, Any]:
         if "position" not in action and "unit_number" not in action:
             raise ActionValidationError(f"{action_type} requires position or unit_number")
         _require_positive_count(action)
+    elif action_type == "research":
+        _require_string(action, "technology")
     elif action_type == "wait":
         ticks = int(action.get("ticks", 60))
         if ticks < 1 or ticks > 36000:

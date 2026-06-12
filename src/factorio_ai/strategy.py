@@ -99,6 +99,21 @@ SKILL_CATALOG: dict[str, SkillContract] = {
         completion=["electric network has sustained production and powered poles"],
         llm_scope="Choose this before electric miners, assemblers, labs, and scalable factory blocks.",
     ),
+    "research_automation": SkillContract(
+        name="research_automation",
+        description="Build and feed the first powered lab to unlock assembling-machine-1.",
+        executor="ResearchAutomationSkill",
+        preconditions=[
+            "basic iron and copper supply available or producible",
+            "steam power available or buildable",
+            "automation science packs available or producible",
+        ],
+        completion=["automation technology is researched", "assembling-machine-1 recipe is unlocked"],
+        llm_scope=(
+            "Choose this when the next milestone requires assemblers. "
+            "Executor handles lab placement, science insertion, and waiting for research."
+        ),
+    ),
     "produce_electronic_circuit": SkillContract(
         name="produce_electronic_circuit",
         description="Produce early green circuits from iron plates and copper cable.",
@@ -274,6 +289,7 @@ def heuristic_strategy(
     total_copper = total_item_count(observation, "copper-plate")
     science = total_item_count(observation, "automation-science-pack")
     circuits = total_item_count(observation, "electronic-circuit")
+    automation_researched = _technology_researched(observation, "automation")
     monitor = summarize_factory(observation, objective, production_targets=production_targets)
     bottlenecks = monitor.get("bottlenecks") if isinstance(monitor.get("bottlenecks"), list) else []
 
@@ -329,22 +345,26 @@ def heuristic_strategy(
                 blockers=["basic iron supply"],
                 expected_effect="Bootstrap the first iron plates.",
             ).to_dict()
-        if science < 5:
+        if not automation_researched:
             return StrategicDecision(
-                selected_skill="produce_automation_science_pack",
+                selected_skill="research_automation",
                 priority=90,
-                reason="The first research tier is not established yet.",
-                evidence=[f"automation_science_pack_total={science}"],
-                blockers=["automation science"],
-                expected_effect="Unlock early research progression.",
+                reason="The rocket program needs assembler-based automation; Automation has not been researched yet.",
+                evidence=[f"automation_science_pack_total={science}", "automation_researched=false"],
+                blockers=["automation research"],
+                expected_effect="Build and feed a powered lab to unlock assembling-machine-1.",
             ).to_dict()
         return StrategicDecision(
-            selected_skill="setup_power",
+            selected_skill="automate_electronic_circuit_line",
             priority=80,
-            reason="After red science, scalable automation needs electricity.",
-            evidence=[f"automation_science_pack_total={science}", f"iron_plate_total={total_iron}"],
-            blockers=["electric power"],
-            expected_effect="Enable electric miners, labs, and assemblers.",
+            reason="Automation is researched, so the next rocket-program step is assembler-based intermediate production.",
+            evidence=[
+                f"automation_science_pack_total={science}",
+                f"iron_plate_total={total_iron}",
+                "automation_researched=true",
+            ],
+            blockers=["assembler-based production lines"],
+            expected_effect="Ask Codex to implement the next executor for belts, inserters, assemblers, and power poles.",
         ).to_dict()
 
     if total_iron < 10:
@@ -388,6 +408,17 @@ def _skill_for_bottleneck_item(item: str) -> str | None:
     if item == "electronic-circuit":
         return "produce_electronic_circuit"
     return None
+
+
+def _technology_researched(observation: dict[str, Any], technology: str) -> bool:
+    research = observation.get("research")
+    if not isinstance(research, dict):
+        return False
+    technologies = research.get("technologies")
+    if not isinstance(technologies, dict):
+        return False
+    state = technologies.get(technology)
+    return bool(isinstance(state, dict) and state.get("researched"))
 
 
 def _entity_centroid(observation: dict[str, Any]) -> dict[str, float] | None:

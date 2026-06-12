@@ -1139,3 +1139,232 @@ def _nearest_tree(observation: dict[str, Any]) -> dict[str, Any] | None:
     if not trees:
         return None
     return min(trees, key=lambda item: float(item.get("distance") or 999999))
+
+
+class ResearchAutomationSkill:
+    """Build and feed the first lab to unlock the Automation technology."""
+
+    def __init__(self, technology: str = "automation") -> None:
+        self.technology = technology
+        self.power_skill = SetupPowerSkill()
+        self.science_skill = AutomationScienceSkill(target_count=10)
+
+    def next_action(self, observation: dict[str, Any]) -> PlannerDecision:
+        technology = _technology_state(observation, self.technology)
+        if bool(technology.get("researched")):
+            return PlannerDecision(None, f"{self.technology} research completed", done=True)
+
+        player = player_position(observation)
+        power_block = _find_steam_power_block(observation)
+        if not _steam_power_ready(power_block):
+            decision = self.power_skill.next_action(observation)
+            if decision.done:
+                return PlannerDecision({"type": "wait", "ticks": 120}, "wait for power observation to settle")
+            return decision
+
+        if _current_research(observation) != self.technology:
+            return PlannerDecision(
+                {"type": "research", "technology": self.technology},
+                f"set current research to {self.technology}",
+            )
+
+        lab = _find_research_lab(observation)
+        if lab is None:
+            decision = self._ensure_item_quantity(observation, player, "lab", 1)
+            if decision is not None:
+                return decision
+            site = _select_lab_site(observation)
+            if site is None:
+                return PlannerDecision(None, "cannot find a powered or wireable lab site near the starter power block")
+            if not site.get("pole_unit_number"):
+                decision = self._ensure_item_quantity(observation, player, "small-electric-pole", 1)
+                if decision is not None:
+                    return decision
+                pole_position = site["pole_position"]
+                if distance(player, pole_position) > 20:
+                    return PlannerDecision(
+                        {"type": "move_to", "position": _stand_position(pole_position)},
+                        "move near planned research pole",
+                    )
+                return PlannerDecision(
+                    {
+                        "type": "build",
+                        "name": "small-electric-pole",
+                        "position": pole_position,
+                    },
+                    "extend electric network for research lab",
+                )
+            lab_position = site["lab_position"]
+            if distance(player, lab_position) > 20:
+                return PlannerDecision(
+                    {"type": "move_to", "position": _stand_position(lab_position)},
+                    "move near planned lab position",
+                )
+            return PlannerDecision(
+                {
+                    "type": "build",
+                    "name": "lab",
+                    "position": lab_position,
+                    "allow_nearby": True,
+                },
+                "place first research lab",
+            )
+
+        pack_name = "automation-science-pack"
+        lab_pack_count = entity_item_count(lab, pack_name)
+        research_progress = _research_progress(observation)
+        pack_goal = _research_pack_goal(observation, self.technology, pack_name)
+        packs_needed = max(1, pack_goal - int(research_progress * pack_goal))
+        if lab_pack_count > 0:
+            return PlannerDecision({"type": "wait", "ticks": 600}, "wait for powered lab to consume science packs")
+
+        inventory_packs = inventory_count(observation, pack_name)
+        if inventory_packs > 0:
+            lab_position = _position(lab)
+            if distance(player, lab_position) > 20:
+                return PlannerDecision(
+                    {"type": "move_to", "position": lab_position},
+                    "move near lab to insert automation science packs",
+                )
+            return PlannerDecision(
+                {
+                    "type": "insert",
+                    "item": pack_name,
+                    "count": min(packs_needed, inventory_packs),
+                    "unit_number": lab.get("unit_number"),
+                    "name": "lab",
+                    "position": lab_position,
+                },
+                "insert automation science packs into lab",
+            )
+
+        science_decision = AutomationScienceSkill(target_count=packs_needed).next_action(observation)
+        if not science_decision.done:
+            return science_decision
+
+        return PlannerDecision({"type": "wait", "ticks": 600}, "wait for automation research progress")
+
+    def _ensure_item_quantity(
+        self,
+        observation: dict[str, Any],
+        player: dict[str, float],
+        item: str,
+        quantity: int,
+    ) -> PlannerDecision | None:
+        if inventory_count(observation, item) >= quantity:
+            return None
+        if craftable_count(observation, item) > 0:
+            return PlannerDecision(
+                {
+                    "type": "craft",
+                    "recipe": item,
+                    "count": min(quantity - inventory_count(observation, item), craftable_count(observation, item)),
+                },
+                f"craft {item} for automation research",
+            )
+
+        if item == "lab":
+            for prerequisite, count in [
+                ("electronic-circuit", 10),
+                ("iron-gear-wheel", 10),
+                ("transport-belt", 4),
+            ]:
+                decision = self._ensure_item_quantity(observation, player, prerequisite, count)
+                if decision is not None:
+                    return decision
+            return None
+
+        if item == "transport-belt":
+            for prerequisite, count in [("iron-gear-wheel", 2), ("iron-plate", 2)]:
+                decision = self._ensure_item_quantity(observation, player, prerequisite, count)
+                if decision is not None:
+                    return decision
+            return None
+
+        if item == "electronic-circuit":
+            decision = ElectronicCircuitSkill(target_count=quantity).next_action(observation)
+            if not decision.done:
+                return decision
+            return None
+
+        return self.power_skill._ensure_item_quantity(observation, player, item, quantity)
+
+
+def _research_root(observation: dict[str, Any]) -> dict[str, Any]:
+    value = observation.get("research")
+    return value if isinstance(value, dict) else {}
+
+
+def _technology_state(observation: dict[str, Any], technology: str) -> dict[str, Any]:
+    research = _research_root(observation)
+    technologies = research.get("technologies")
+    if not isinstance(technologies, dict):
+        return {}
+    value = technologies.get(technology)
+    return value if isinstance(value, dict) else {}
+
+
+def _current_research(observation: dict[str, Any]) -> str | None:
+    research = _research_root(observation)
+    current = research.get("current")
+    if not current and isinstance(research.get("queue"), list) and research["queue"]:
+        current = research["queue"][0]
+    return current if isinstance(current, str) and current else None
+
+
+def _research_progress(observation: dict[str, Any]) -> float:
+    value = _research_root(observation).get("progress")
+    try:
+        return max(0.0, min(1.0, float(value or 0.0)))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _research_pack_goal(observation: dict[str, Any], technology: str, pack_name: str) -> int:
+    state = _technology_state(observation, technology)
+    try:
+        unit_count = int(state.get("research_unit_count") or 10)
+    except (TypeError, ValueError):
+        unit_count = 10
+    ingredients = state.get("ingredients") if isinstance(state.get("ingredients"), dict) else {}
+    try:
+        pack_amount = int(ingredients.get(pack_name) or 1)
+    except (TypeError, ValueError):
+        pack_amount = 1
+    return max(1, unit_count * pack_amount)
+
+
+def _find_research_lab(observation: dict[str, Any]) -> dict[str, Any] | None:
+    labs = entities_named(observation, "lab")
+    if not labs:
+        return None
+    labs.sort(
+        key=lambda item: (
+            0 if item.get("electric_network_connected") else 1,
+            float(item.get("distance") or 999999),
+        )
+    )
+    return labs[0]
+
+
+def _select_lab_site(observation: dict[str, Any]) -> dict[str, Any] | None:
+    sites = observation.get("lab_sites")
+    if not isinstance(sites, list):
+        return None
+    candidates = [
+        site
+        for site in sites
+        if isinstance(site, dict)
+        and isinstance(site.get("pole_position"), dict)
+        and isinstance(site.get("lab_position"), dict)
+    ]
+    if not candidates:
+        return None
+    candidates.sort(
+        key=lambda item: (
+            0 if item.get("powered") else 1,
+            0 if item.get("pole_unit_number") else 1,
+            float(item.get("distance") or 999999),
+        )
+    )
+    return candidates[0]

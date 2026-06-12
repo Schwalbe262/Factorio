@@ -33,6 +33,11 @@ class SkillRegistryTests(unittest.TestCase):
         status = skill_status("setup_power")
         self.assertTrue(status.implemented)
         self.assertEqual(status.executor, "SetupPowerSkill")
+
+    def test_research_automation_skill_is_implemented(self):
+        status = skill_status("research_automation")
+        self.assertTrue(status.implemented)
+        self.assertEqual(status.executor, "ResearchAutomationSkill")
         self.assertFalse(status.codex_required)
 
     def test_missing_skill_writes_backlog(self):
