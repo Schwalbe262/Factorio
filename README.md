@@ -15,6 +15,7 @@ Python owns the safety checks, orchestration, logs, and planner loop. Slurm is o
 - Observe player position, inventory, nearby resources, nearby entities, and craftable recipes.
 - Execute allowlisted actions only.
 - Run a rule-based `produce_iron_plate` skill until at least 10 iron plates exist in inventory or machine outputs.
+- Run a rule-based `produce_automation_science_pack` skill until at least 5 automation science packs exist.
 - Submit planner tasks to a Slurm worker queue when configured, with local rule-based fallback.
 
 ## Requirements
@@ -67,6 +68,12 @@ In another terminal, run the iron plate MVP loop:
 factorio-ai run-iron-mvp --target 10
 ```
 
+Or run the automation science MVP loop from a fresh server save:
+
+```powershell
+factorio-ai run-science-mvp --target 5 --max-steps 500
+```
+
 ## Achievement-Compatible Track
 
 The current `factorio-ai` engine is a development and verification track. It uses a mod, RCON,
@@ -83,6 +90,30 @@ Achievement-compatible play must run as a separate vanilla track:
 The planner and skill code should stay portable across both tracks. The mod/RCON track is used to
 iterate quickly and prove behavior, then the vanilla track reuses the same high-level decisions with
 a different executor.
+
+Launch the normal Steam game for this track:
+
+```powershell
+factorio-ai launch-vanilla-gui
+```
+
+This command uses `steam://rungameid/427520` and does not pass custom Factorio arguments. The
+vanilla executor must navigate the normal GUI, including New Game -> Freeplay (Space Age), with
+ordinary keyboard and mouse input. Any path using `--mod-directory`, RCON, or Lua commands belongs
+to the development track and must not be used for achievement runs.
+
+## Blueprint Library
+
+Rocket-scale play should use proven layouts instead of inventing every production block from
+scratch. `factorio_ai.blueprints` decodes Factorio blueprint exchange strings and summarizes entity
+counts, so blueprint sources such as Factorio Prints can feed the planner as candidate designs.
+
+The intended planner flow is:
+
+1. Decode candidate blueprints.
+2. Summarize required entities and technologies.
+3. Ask the Slurm LLM worker to rank designs against the current game state.
+4. Execute only validated build actions through the active executor.
 
 ## Slurm Worker
 
@@ -130,9 +161,8 @@ This repository is intended to be committed and pushed by part:
 5. Slurm worker.
 6. Research automation expansion.
 
-The current workspace has no GitHub remote configured. Add one before pushing:
+The current remote is configured as:
 
 ```powershell
-git remote add origin <github-repo-url>
-git push -u origin master
+git remote -v
 ```

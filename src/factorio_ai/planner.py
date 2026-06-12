@@ -234,7 +234,7 @@ class AutomationScienceSkill:
                 return decision
 
         player = player_position(observation)
-        copper_plate_total = total_item_count(observation, "copper-plate")
+        copper_plate_inventory = inventory_count(observation, "copper-plate")
         gear_total = inventory_count(observation, "iron-gear-wheel")
         science_needed = self.target_count - science_total
 
@@ -258,7 +258,7 @@ class AutomationScienceSkill:
                 "craft iron gear wheels for automation science",
             )
 
-        if copper_plate_total < science_needed:
+        if copper_plate_inventory < science_needed:
             decision = self._produce_copper_plate(observation, player, science_needed)
             if decision is not None:
                 return decision

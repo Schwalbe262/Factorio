@@ -9,6 +9,7 @@ from .config import load_config
 from .controller import FactorioController
 from .factorio import create_save, install_mod, start_gui_client, start_server, wait_for_rcon
 from . import remote_slurm
+from .vanilla_gui import VanillaGuiDriver, launch_vanilla_gui
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -27,6 +28,16 @@ def main(argv: list[str] | None = None) -> None:
     launch_gui_parser = subparsers.add_parser("launch-gui", help="Launch a GUI Factorio client and connect to the local server")
     launch_gui_parser.add_argument("--window-size", default="1600x900")
     launch_gui_parser.add_argument("--no-connect", action="store_true")
+
+    vanilla_gui_parser = subparsers.add_parser(
+        "launch-vanilla-gui",
+        help="Launch normal Steam Factorio for achievement-compatible GUI automation",
+    )
+    vanilla_gui_parser.add_argument("--direct", action="store_true", help="Launch factorio.exe directly instead of Steam")
+    vanilla_gui_parser.add_argument("--window-size", help="Optional direct-launch window size, e.g. 1600x900")
+
+    confirm_parser = subparsers.add_parser("confirm-steam-launch", help="Click Steam's custom-arguments continue prompt")
+    confirm_parser.add_argument("--timeout", type=float, default=15.0)
 
     subparsers.add_parser("observe", help="Print /ai_observe JSON")
 
@@ -76,6 +87,21 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "launch-gui":
         proc = start_gui_client(cfg, window_size=args.window_size, connect=not args.no_connect)
         print_json({"ok": True, "pid": proc.pid})
+        return
+
+    if args.command == "launch-vanilla-gui":
+        launch_args: list[str] = []
+        if args.window_size:
+            launch_args.extend(["--window-size", args.window_size])
+        proc = launch_vanilla_gui(cfg, via_steam=not args.direct, args=launch_args)
+        print_json({"ok": True, "pid": proc.pid if proc else None, "viaSteam": not args.direct})
+        return
+
+    if args.command == "confirm-steam-launch":
+        clicked = VanillaGuiDriver(cfg).click_steam_continue_prompt(timeout_seconds=args.timeout)
+        print_json({"ok": clicked})
+        if not clicked:
+            raise SystemExit(1)
         return
 
     if args.command == "observe":

@@ -100,6 +100,28 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["type"], "build")
         self.assertEqual(decision.action["name"], "stone-furnace")
 
+    def test_science_skill_takes_copper_from_furnace_before_waiting(self):
+        obs = base_observation()
+        obs["inventory"] = {
+            "iron-plate": 10,
+            "iron-gear-wheel": 1,
+            "coal": 8,
+            "automation-science-pack": 4,
+        }
+        obs["resources"].append({"name": "copper-ore", "position": {"x": 8, "y": 0}, "distance": 8})
+        obs["entities"] = [
+            {
+                "name": "stone-furnace",
+                "unit_number": 201,
+                "position": {"x": 4, "y": 0},
+                "distance": 4,
+                "inventories": {"3": {"copper-plate": 4}},
+            }
+        ]
+        decision = AutomationScienceSkill(target_count=5).next_action(obs)
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["item"], "copper-plate")
+
 
 if __name__ == "__main__":
     unittest.main()
