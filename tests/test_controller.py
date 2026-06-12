@@ -53,7 +53,15 @@ class ControllerTests(unittest.TestCase):
             self.assertEqual(circuit_line_config["goal"], "automate_electronic_circuit_line")
             self.assertEqual(circuit_line_config["target"], 6)
             self.assertEqual(circuit_line_config["max_steps"], 555)
-            self.assertIsNone(controller._skill_run_config("expand_iron_smelting"))
+            logistics_config = controller._skill_run_config("research_logistics", max_steps=666)
+            self.assertIsNotNone(logistics_config)
+            self.assertEqual(logistics_config["goal"], "research_logistics")
+            self.assertEqual(logistics_config["max_steps"], 666)
+            expand_config = controller._skill_run_config("expand_iron_smelting", target_count=38, max_steps=777)
+            self.assertIsNotNone(expand_config)
+            self.assertEqual(expand_config["goal"], "expand_iron_smelting")
+            self.assertEqual(expand_config["target"], 38)
+            self.assertEqual(expand_config["max_steps"], 777)
 
     def test_strategy_step_summary_serializes_run(self):
         run = RunSummary(

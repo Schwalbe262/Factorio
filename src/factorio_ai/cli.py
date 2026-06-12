@@ -87,6 +87,13 @@ def main(argv: list[str] | None = None) -> None:
     belt_smelting_parser.add_argument("--target", type=int, default=10)
     belt_smelting_parser.add_argument("--max-steps", type=int, default=700)
 
+    expand_iron_parser = subparsers.add_parser(
+        "run-expand-iron-smelting-mvp",
+        help="Add belt-fed iron smelting capacity",
+    )
+    expand_iron_parser.add_argument("--target-rate", type=int, default=37)
+    expand_iron_parser.add_argument("--max-steps", type=int, default=900)
+
     power_parser = subparsers.add_parser("run-power-mvp", help="Build the first steam power block")
     power_parser.add_argument("--max-steps", type=int, default=900)
 
@@ -102,6 +109,12 @@ def main(argv: list[str] | None = None) -> None:
     )
     circuit_automation_parser.add_argument("--target", type=int, default=5)
     circuit_automation_parser.add_argument("--max-steps", type=int, default=1800)
+
+    logistics_research_parser = subparsers.add_parser(
+        "run-logistics-research-mvp",
+        help="Research Logistics with the first powered lab",
+    )
+    logistics_research_parser.add_argument("--max-steps", type=int, default=2200)
 
     subparsers.add_parser("slurm-deploy", help="Deploy project source to the Slurm remote directory")
     subparsers.add_parser("slurm-start-worker", help="Submit the persistent Slurm worker job")
@@ -286,6 +299,22 @@ def main(argv: list[str] | None = None) -> None:
             raise SystemExit(1)
         return
 
+    if args.command == "run-expand-iron-smelting-mvp":
+        summary = FactorioController(cfg).run_expand_iron_smelting_mvp(target_rate=args.target_rate, max_steps=args.max_steps)
+        print_json(
+            {
+                "ok": summary.ok,
+                "reason": summary.reason,
+                "steps": summary.steps,
+                "ironPlateCount": summary.item_count,
+                "targetRatePerMinute": args.target_rate,
+                "logPath": str(summary.log_path),
+            }
+        )
+        if not summary.ok:
+            raise SystemExit(1)
+        return
+
     if args.command == "run-power-mvp":
         summary = FactorioController(cfg).run_power_mvp(max_steps=args.max_steps)
         print_json(
@@ -323,6 +352,21 @@ def main(argv: list[str] | None = None) -> None:
                 "reason": summary.reason,
                 "steps": summary.steps,
                 "electronicCircuitCount": summary.item_count,
+                "logPath": str(summary.log_path),
+            }
+        )
+        if not summary.ok:
+            raise SystemExit(1)
+        return
+
+    if args.command == "run-logistics-research-mvp":
+        summary = FactorioController(cfg).run_logistics_research_mvp(max_steps=args.max_steps)
+        print_json(
+            {
+                "ok": summary.ok,
+                "reason": summary.reason,
+                "steps": summary.steps,
+                "automationSciencePackCount": summary.item_count,
                 "logPath": str(summary.log_path),
             }
         )

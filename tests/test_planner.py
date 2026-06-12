@@ -6,8 +6,10 @@ from factorio_ai.planner import (
     CircuitAutomationSkill,
     CopperPlateSkill,
     ElectronicCircuitSkill,
+    ExpandIronSmeltingSkill,
     IronPlateSkill,
     ResearchAutomationSkill,
+    ResearchTechnologySkill,
     SetupPowerSkill,
 )
 
@@ -427,6 +429,48 @@ class PlannerTests(unittest.TestCase):
         self.assertTrue(decision.done)
         self.assertIsNone(decision.action)
 
+    def test_expand_iron_smelting_places_new_belt_when_below_capacity(self):
+        obs = base_observation()
+        obs["inventory"] = {
+            "coal": 12,
+            "burner-mining-drill": 1,
+            "stone-furnace": 1,
+            "burner-inserter": 1,
+            "transport-belt": 2,
+        }
+        decision = ExpandIronSmeltingSkill(target_rate_per_minute=37).next_action(obs)
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "transport-belt")
+
+    def test_expand_iron_smelting_done_when_capacity_target_reached(self):
+        obs = base_observation()
+        obs["inventory"] = {"coal": 12}
+        obs["entities"] = complete_belt_smelting_entities(4, 0, 500) + complete_belt_smelting_entities(14, 0, 600)
+        decision = ExpandIronSmeltingSkill(target_rate_per_minute=37).next_action(obs)
+        self.assertTrue(decision.done)
+        self.assertIsNone(decision.action)
+
+    def test_expand_iron_smelting_clears_blocking_rock(self):
+        obs = base_observation()
+        obs["inventory"] = {
+            "coal": 12,
+            "burner-mining-drill": 1,
+            "stone-furnace": 1,
+            "burner-inserter": 1,
+            "transport-belt": 2,
+        }
+        obs["entities"] = [
+            {
+                "name": "huge-rock",
+                "type": "simple-entity",
+                "position": {"x": 6, "y": 0},
+                "distance": 6,
+            }
+        ]
+        decision = ExpandIronSmeltingSkill(target_rate_per_minute=37).next_action(obs)
+        self.assertEqual(decision.action["type"], "mine")
+        self.assertEqual(decision.action["name"], "huge-rock")
+
     def test_setup_power_skill_places_offshore_pump_first_when_parts_exist(self):
         obs = base_observation()
         obs["inventory"] = {
@@ -599,6 +643,36 @@ class PlannerTests(unittest.TestCase):
         decision = ResearchAutomationSkill().next_action(obs)
         self.assertEqual(decision.action["type"], "insert")
         self.assertEqual(decision.action["item"], "automation-science-pack")
+
+    def test_research_logistics_done_when_technology_researched(self):
+        obs = powered_logistics_observation()
+        obs["research"]["technologies"]["logistics"]["researched"] = True
+        decision = ResearchTechnologySkill("logistics").next_action(obs)
+        self.assertTrue(decision.done)
+        self.assertIsNone(decision.action)
+
+    def test_research_logistics_sets_current_research(self):
+        obs = powered_logistics_observation()
+        decision = ResearchTechnologySkill("logistics").next_action(obs)
+        self.assertEqual(decision.action["type"], "research")
+        self.assertEqual(decision.action["technology"], "logistics")
+
+    def test_research_logistics_inserts_red_science_into_lab(self):
+        obs = powered_logistics_observation()
+        obs["research"]["current"] = "logistics"
+        obs["inventory"]["automation-science-pack"] = 20
+        decision = ResearchTechnologySkill("logistics").next_action(obs)
+        self.assertEqual(decision.action["type"], "insert")
+        self.assertEqual(decision.action["item"], "automation-science-pack")
+
+    def test_research_logistics_produces_red_science_when_missing(self):
+        obs = powered_logistics_observation()
+        obs["research"]["current"] = "logistics"
+        obs["inventory"] = {"iron-plate": 20, "iron-gear-wheel": 1, "copper-plate": 1}
+        obs["craftable"] = {"automation-science-pack": 1}
+        decision = ResearchTechnologySkill("logistics").next_action(obs)
+        self.assertEqual(decision.action["type"], "craft")
+        self.assertEqual(decision.action["recipe"], "automation-science-pack")
 
     def test_circuit_automation_delegates_until_automation_is_researched(self):
         obs = powered_research_observation()
@@ -774,6 +848,28 @@ def powered_automation_observation():
     return obs
 
 
+def powered_logistics_observation():
+    obs = powered_automation_observation()
+    obs["entities"].append(
+        {
+            "name": "lab",
+            "unit_number": 701,
+            "position": {"x": 13.5, "y": 6.5},
+            "distance": 5,
+            "electric_network_connected": True,
+            "inventories": {},
+        }
+    )
+    obs["research"]["current"] = None
+    obs["research"]["technologies"]["logistics"] = {
+        "researched": False,
+        "enabled": True,
+        "research_unit_count": 20,
+        "ingredients": {"automation-science-pack": 1},
+    }
+    return obs
+
+
 def circuit_cell_entities(
     cable_recipe="copper-cable",
     circuit_recipe="electronic-circuit",
@@ -816,6 +912,46 @@ def circuit_cell_entities(
             "distance": 4,
             "electric_network_connected": powered,
             "inventories": {},
+        },
+    ]
+
+
+def complete_belt_smelting_entities(drill_x, drill_y, base_unit):
+    return [
+        {
+            "name": "burner-mining-drill",
+            "unit_number": base_unit,
+            "position": {"x": drill_x, "y": drill_y},
+            "distance": 4,
+            "inventories": {"1": {"coal": 3}},
+        },
+        {
+            "name": "transport-belt",
+            "unit_number": base_unit + 1,
+            "position": {"x": drill_x + 2, "y": drill_y},
+            "distance": 6,
+            "inventories": {},
+        },
+        {
+            "name": "transport-belt",
+            "unit_number": base_unit + 2,
+            "position": {"x": drill_x + 3, "y": drill_y},
+            "distance": 7,
+            "inventories": {},
+        },
+        {
+            "name": "burner-inserter",
+            "unit_number": base_unit + 3,
+            "position": {"x": drill_x + 4, "y": drill_y},
+            "distance": 8,
+            "inventories": {"1": {"coal": 2}},
+        },
+        {
+            "name": "stone-furnace",
+            "unit_number": base_unit + 4,
+            "position": {"x": drill_x + 5, "y": drill_y},
+            "distance": 9,
+            "inventories": {"2": {"iron-ore": 1}, "1": {"coal": 3}},
         },
     ]
 

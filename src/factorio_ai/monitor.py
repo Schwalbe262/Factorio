@@ -85,6 +85,11 @@ MINER_RATES_PER_MINUTE = {
     "burner-mining-drill": 15.0,
     "electric-mining-drill": 30.0,
 }
+ASSEMBLER_SPEEDS = {
+    "assembling-machine-1": 0.5,
+    "assembling-machine-2": 0.75,
+    "assembling-machine-3": 1.25,
+}
 
 
 def summarize_factory(
@@ -122,12 +127,31 @@ def inventory_summary(observation: dict[str, Any], objective: str) -> dict[str, 
 
 def estimate_production(observation: dict[str, Any]) -> list[ProductionEstimate]:
     rates: dict[str, ProductionEstimate] = {}
+    busy_iron_furnaces = 0
     for entity in _entities(observation):
         name = str(entity.get("name") or "")
         if name in FURNACE_SPEEDS:
-            _add_estimate(rates, _estimate_furnace(entity, FURNACE_SPEEDS[name]))
+            estimate = _estimate_furnace(entity, FURNACE_SPEEDS[name])
+            if estimate and estimate.item == "iron-plate":
+                busy_iron_furnaces += 1
+            _add_estimate(rates, estimate)
         elif name in MINER_RATES_PER_MINUTE:
             _add_estimate(rates, _estimate_miner(entity, observation, MINER_RATES_PER_MINUTE[name]))
+        elif name in ASSEMBLER_SPEEDS:
+            _add_estimate(rates, _estimate_assembler(entity, ASSEMBLER_SPEEDS[name]))
+    complete_iron_lines = _complete_belt_iron_line_count(observation)
+    extra_lines = max(0, complete_iron_lines - busy_iron_furnaces)
+    if extra_lines:
+        _add_estimate(
+            rates,
+            ProductionEstimate(
+                item="iron-plate",
+                per_minute=round(extra_lines * 18.75, 3),
+                producers=extra_lines,
+                confidence=0.5,
+                notes=["inferred from complete burner belt smelting lines"],
+            ),
+        )
     return sorted(rates.values(), key=lambda item: (-item.per_minute, item.item))
 
 
@@ -307,6 +331,30 @@ def _estimate_miner(
     )
 
 
+def _estimate_assembler(entity: dict[str, Any], crafting_speed: float) -> ProductionEstimate | None:
+    recipe_name = entity.get("recipe")
+    if not isinstance(recipe_name, str) or not recipe_name:
+        return None
+    recipe = RECIPES.get(recipe_name)
+    if recipe is None:
+        return None
+    if entity.get("electric_network_connected") is False:
+        return None
+    estimates = []
+    for product, count in recipe.products.items():
+        per_minute = 60.0 * crafting_speed * float(count) / max(recipe.time_seconds, 0.001)
+        estimates.append(
+            ProductionEstimate(
+                item=product,
+                per_minute=round(per_minute, 3),
+                producers=1,
+                confidence=0.6,
+                notes=[f"inferred from {entity.get('name')} recipe {recipe_name}"],
+            )
+        )
+    return estimates[0] if estimates else None
+
+
 def _add_estimate(rates: dict[str, ProductionEstimate], estimate: ProductionEstimate | None) -> None:
     if estimate is None:
         return
@@ -355,6 +403,39 @@ def _nearest_resource(observation: dict[str, Any], position: dict[str, float]) -
     if distance(position, nearest["position"]) > 3.0:
         return None
     return nearest
+
+
+def _complete_belt_iron_line_count(observation: dict[str, Any]) -> int:
+    furnace_positions: set[tuple[float, float]] = set()
+    for belt in [item for item in _entities(observation) if item.get("name") == "transport-belt"]:
+        belt_position = _position(belt)
+        layout = {
+            "belt1": belt,
+            "belt2": _entity_near(observation, "transport-belt", {"x": belt_position["x"] + 1, "y": belt_position["y"]}, 0.75),
+            "inserter": _entity_near(observation, "burner-inserter", {"x": belt_position["x"] + 2, "y": belt_position["y"]}, 1.0),
+            "furnace": _entity_near(observation, "stone-furnace", {"x": belt_position["x"] + 3, "y": belt_position["y"]}, 1.5),
+            "drill": _entity_near(observation, "burner-mining-drill", {"x": belt_position["x"] - 2, "y": belt_position["y"]}, 2.0),
+        }
+        if all(layout.values()):
+            furnace_position = _position(layout["furnace"])
+            furnace_positions.add((round(furnace_position["x"], 2), round(furnace_position["y"], 2)))
+    return len(furnace_positions)
+
+
+def _entity_near(observation: dict[str, Any], name: str, position: dict[str, float], radius: float) -> dict[str, Any] | None:
+    candidates = [
+        item
+        for item in _entities(observation)
+        if item.get("name") == name and distance(position, _position(item)) <= radius
+    ]
+    if not candidates:
+        return None
+    return min(candidates, key=lambda item: distance(position, _position(item)))
+
+
+def _position(entity: dict[str, Any]) -> dict[str, float]:
+    raw = entity.get("position") if isinstance(entity.get("position"), dict) else {}
+    return {"x": float(raw.get("x") or 0.0), "y": float(raw.get("y") or 0.0)}
 
 
 def _dependents(required: set[str]) -> dict[str, list[str]]:

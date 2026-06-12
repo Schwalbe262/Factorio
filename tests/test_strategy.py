@@ -40,6 +40,49 @@ class StrategyTests(unittest.TestCase):
         )
         self.assertEqual(result["selected_skill"], "automate_electronic_circuit_line")
 
+    def test_rocket_goal_researches_logistics_after_circuit_cell_ready(self):
+        result = heuristic_strategy(
+            "launch_rocket_program",
+            {
+                "inventory": {"iron-plate": 20, "electronic-circuit": 6},
+                "entities": [
+                    {
+                        "name": "assembling-machine-1",
+                        "recipe": "copper-cable",
+                        "electric_network_connected": True,
+                    },
+                    {
+                        "name": "assembling-machine-1",
+                        "recipe": "electronic-circuit",
+                        "electric_network_connected": True,
+                    },
+                ],
+                "research": {
+                    "technologies": {
+                        "automation": {"researched": True},
+                        "logistics": {"researched": False},
+                    },
+                },
+            },
+        )
+        self.assertEqual(result["selected_skill"], "research_logistics")
+
+    def test_electronic_circuit_bottleneck_uses_automation_when_available(self):
+        result = heuristic_strategy(
+            "launch_rocket_program",
+            {
+                "inventory": {"iron-plate": 20, "electronic-circuit": 1},
+                "entities": [],
+                "research": {
+                    "technologies": {
+                        "automation": {"researched": True},
+                    },
+                },
+            },
+            production_targets={"electronic-circuit": 20.0},
+        )
+        self.assertEqual(result["selected_skill"], "automate_electronic_circuit_line")
+
     def test_normalize_rejects_unknown_skill(self):
         result = normalize_strategy_response({"selected_skill": "teleport_to_rocket", "priority": 100})
         self.assertEqual(result["selected_skill"], "launch_rocket_program")
@@ -50,6 +93,7 @@ class StrategyTests(unittest.TestCase):
         self.assertTrue(any(item["name"] == "build_belt_smelting_line" for item in catalog))
         self.assertTrue(any(item["name"] == "research_automation" for item in catalog))
         self.assertTrue(any(item["name"] == "automate_electronic_circuit_line" for item in catalog))
+        self.assertTrue(any(item["name"] == "research_logistics" for item in catalog))
         self.assertTrue(any(item["name"] == "build_rail_supply_line" for item in catalog))
         self.assertEqual(
             next(item for item in catalog if item["name"] == "produce_electronic_circuit")["executor"],

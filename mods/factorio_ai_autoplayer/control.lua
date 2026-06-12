@@ -611,6 +611,17 @@ local function collect_entities(surface, position)
       table.insert(entities, entity_snapshot(entity, position))
     end
   end
+  local simple_entities = surface.find_entities_filtered({
+    position = position,
+    radius = OBSERVE_RADIUS,
+    type = "simple-entity",
+    limit = 80
+  })
+  for _, entity in pairs(simple_entities) do
+    if entity.valid then
+      table.insert(entities, entity_snapshot(entity, position))
+    end
+  end
   local misc = surface.find_entities_filtered({
     position = position,
     radius = 32,

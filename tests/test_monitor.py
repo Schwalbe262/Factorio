@@ -1,6 +1,6 @@
 import unittest
 
-from factorio_ai.monitor import estimate_bottlenecks, estimate_net_rates, production_target_status
+from factorio_ai.monitor import estimate_bottlenecks, estimate_net_rates, estimate_production, production_target_status
 from factorio_ai.monitor import ConsumptionEstimate, ProductionEstimate
 
 
@@ -29,6 +29,55 @@ class MonitorTests(unittest.TestCase):
             [ConsumptionEstimate("iron-plate", 12.0, 1, 0.7, [])],
         )
         self.assertEqual(net["iron-plate"], 18.0)
+
+    def test_estimates_powered_assembler_recipe_output(self):
+        estimates = estimate_production(
+            {
+                "entities": [
+                    {
+                        "name": "assembling-machine-1",
+                        "recipe": "electronic-circuit",
+                        "electric_network_connected": True,
+                        "inventories": {},
+                    }
+                ]
+            }
+        )
+        by_item = {item.item: item for item in estimates}
+        self.assertIn("electronic-circuit", by_item)
+        self.assertEqual(by_item["electronic-circuit"].per_minute, 60.0)
+
+    def test_ignores_unpowered_assembler_output(self):
+        estimates = estimate_production(
+            {
+                "entities": [
+                    {
+                        "name": "assembling-machine-1",
+                        "recipe": "electronic-circuit",
+                        "electric_network_connected": False,
+                        "inventories": {},
+                    }
+                ]
+            }
+        )
+        self.assertEqual(estimates, [])
+
+    def test_estimates_complete_belt_iron_smelting_line(self):
+        estimates = estimate_production(
+            {
+                "entities": [
+                    {"name": "burner-mining-drill", "position": {"x": 4, "y": 0}, "inventories": {}},
+                    {"name": "transport-belt", "position": {"x": 6, "y": 0}, "inventories": {}},
+                    {"name": "transport-belt", "position": {"x": 7, "y": 0}, "inventories": {}},
+                    {"name": "burner-inserter", "position": {"x": 8, "y": 0}, "inventories": {}},
+                    {"name": "stone-furnace", "position": {"x": 9, "y": 0}, "inventories": {}},
+                ],
+                "resources": [],
+            }
+        )
+        by_item = {item.item: item for item in estimates}
+        self.assertIn("iron-plate", by_item)
+        self.assertEqual(by_item["iron-plate"].per_minute, 18.75)
 
 
 if __name__ == "__main__":

@@ -645,6 +645,113 @@ class BeltSmeltingLineSkill:
         return entity_item_count(furnace, "iron-ore") > 0 or entity_item_count(furnace, "iron-plate") > 0
 
 
+class ExpandIronSmeltingSkill:
+    """Incrementally add belt-fed iron smelting capacity."""
+
+    def __init__(self, target_rate_per_minute: float = 37.0) -> None:
+        self.target_rate_per_minute = target_rate_per_minute
+        self.line_skill = BeltSmeltingLineSkill(target_count=20)
+
+    def next_action(self, observation: dict[str, Any]) -> PlannerDecision:
+        estimated_rate = _estimated_iron_plate_rate(observation)
+        if estimated_rate >= self.target_rate_per_minute:
+            return PlannerDecision(
+                None,
+                f"iron smelting capacity target reached: {estimated_rate}/{self.target_rate_per_minute}/min",
+                done=True,
+            )
+
+        player = player_position(observation)
+        layout = _find_incomplete_belt_smelting_line(observation) or _select_belt_smelting_layout(observation)
+        if layout is None:
+            return PlannerDecision(None, "cannot find open iron ore site for another smelting line")
+
+        if inventory_count(observation, "coal") < 12:
+            coal = nearest_resource(observation, "coal")
+            if coal is None:
+                return PlannerDecision(None, "cannot find coal for expanded iron smelting")
+            return self.line_skill.support_skill._mine_resource(player, coal, "coal", 16)
+
+        need = _line_missing_item(observation, layout)
+        if need:
+            decision = self.line_skill._ensure_item(observation, player, need)
+            if decision is not None:
+                return decision
+
+        for name, key, direction in [
+            ("transport-belt", "belt1_position", EAST),
+            ("transport-belt", "belt2_position", EAST),
+            ("burner-inserter", "inserter_position", WEST),
+            ("stone-furnace", "furnace_position", None),
+            ("burner-mining-drill", "drill_position", EAST),
+        ]:
+            entity_key = _entity_key_for_layout(name, key)
+            if layout.get(entity_key) is not None:
+                continue
+            position = layout[key]
+            blocker = _blocking_obstacle_near(observation, position)
+            if blocker is not None:
+                blocker_position = _position(blocker)
+                if distance(player, blocker_position) > 8:
+                    return PlannerDecision(
+                        {"type": "move_to", "position": blocker_position},
+                        f"move near blocking {blocker.get('name')} before placing {name}",
+                    )
+                return PlannerDecision(
+                    {
+                        "type": "mine",
+                        "name": blocker.get("name"),
+                        "position": blocker_position,
+                        "count": 1,
+                    },
+                    f"clear blocking {blocker.get('name')} before placing {name}",
+                )
+            if distance(player, position) > 20 or distance(player, position) < 2.0:
+                return PlannerDecision(
+                    {"type": "move_to", "position": _stand_position(position, offset=3.0)},
+                    f"move near planned {name} position for iron smelting expansion",
+                )
+            action: dict[str, Any] = {
+                "type": "build",
+                "name": name,
+                "position": position,
+                "allow_nearby": name == "burner-mining-drill",
+            }
+            if direction is not None:
+                action["direction"] = direction
+            return PlannerDecision(action, f"place {name} for expanded iron smelting")
+
+        for entity_name, item, threshold, count in [
+            ("burner-mining-drill", "coal", 3, 5),
+            ("burner-inserter", "coal", 2, 3),
+            ("stone-furnace", "coal", 3, 5),
+        ]:
+            entity = layout.get(_entity_key(entity_name))
+            if entity and entity_item_count(entity, item) < threshold:
+                position = _position(entity)
+                if distance(player, position) > 20:
+                    return PlannerDecision(
+                        {"type": "move_to", "position": position},
+                        f"move near {entity_name} to fuel expanded iron smelting",
+                    )
+                return PlannerDecision(
+                    {
+                        "type": "insert",
+                        "item": item,
+                        "count": min(count, inventory_count(observation, item)),
+                        "unit_number": entity.get("unit_number"),
+                        "name": entity_name,
+                        "position": position,
+                    },
+                    f"fuel {entity_name} in expanded iron smelting",
+                )
+
+        return PlannerDecision(
+            {"type": "wait", "ticks": 300},
+            "wait for expanded iron smelting line to start",
+        )
+
+
 class SetupPowerSkill:
     """Build the first steam power block: offshore pump, boiler, engine, and pole."""
 
@@ -903,19 +1010,101 @@ def _find_belt_smelting_line(observation: dict[str, Any]) -> dict[str, Any] | No
     belts = entities_named(observation, "transport-belt")
     candidates: list[tuple[int, dict[str, Any]]] = []
     for belt in belts:
-        belt_pos = _position(belt)
-        layout = _layout_from_belt1_position(belt_pos)
-        layout["belt1"] = belt
-        layout["belt2"] = _entity_near(observation, "transport-belt", layout["belt2_position"], radius=0.75)
-        layout["inserter"] = _entity_near(observation, "burner-inserter", layout["inserter_position"], radius=1.0)
-        layout["furnace"] = _entity_near(observation, "stone-furnace", layout["furnace_position"], radius=1.5)
-        layout["drill"] = _entity_near(observation, "burner-mining-drill", layout["drill_position"], radius=2.0)
+        layout = _belt_layout_from_anchor(observation, belt)
         score = sum(1 for key in ("belt1", "belt2", "inserter", "furnace", "drill") if layout.get(key) is not None)
         candidates.append((score, layout))
     if not candidates:
         return None
     candidates.sort(key=lambda item: item[0], reverse=True)
     return candidates[0][1]
+
+
+def _find_incomplete_belt_smelting_line(observation: dict[str, Any]) -> dict[str, Any] | None:
+    candidates: list[tuple[int, float, dict[str, Any]]] = []
+    for belt in entities_named(observation, "transport-belt"):
+        layout = _belt_layout_from_anchor(observation, belt)
+        if _layout_has_unrelated_blocker(observation, layout):
+            continue
+        score = sum(1 for key in ("belt1", "belt2", "inserter", "furnace", "drill") if layout.get(key) is not None)
+        if 0 < score < 5:
+            candidates.append((score, float(belt.get("distance") or 999999), layout))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (-item[0], item[1]))
+    return candidates[0][2]
+
+
+def _belt_layout_from_anchor(observation: dict[str, Any], belt: dict[str, Any]) -> dict[str, Any]:
+    belt_pos = _position(belt)
+    layout = _layout_from_belt1_position(belt_pos)
+    layout["belt1"] = belt
+    layout["belt2"] = _entity_near(observation, "transport-belt", layout["belt2_position"], radius=0.75)
+    layout["inserter"] = _entity_near(observation, "burner-inserter", layout["inserter_position"], radius=1.0)
+    layout["furnace"] = _entity_near(observation, "stone-furnace", layout["furnace_position"], radius=1.5)
+    layout["drill"] = _entity_near(observation, "burner-mining-drill", layout["drill_position"], radius=2.0)
+    return layout
+
+
+def _estimated_iron_plate_rate(observation: dict[str, Any]) -> float:
+    busy_furnaces = len([item for item in entities_named(observation, "stone-furnace") if _is_iron_busy_furnace(item)])
+    complete_lines = _complete_belt_smelting_line_count(observation)
+    return round(max(busy_furnaces, complete_lines) * 18.75, 3)
+
+
+def _complete_belt_smelting_line_count(observation: dict[str, Any]) -> int:
+    furnace_positions: set[tuple[float, float]] = set()
+    for belt in entities_named(observation, "transport-belt"):
+        layout = _belt_layout_from_anchor(observation, belt)
+        if all(layout.get(key) is not None for key in ("belt1", "belt2", "inserter", "furnace", "drill")):
+            furnace_pos = _position(layout["furnace"])
+            furnace_positions.add((round(furnace_pos["x"], 2), round(furnace_pos["y"], 2)))
+    return len(furnace_positions)
+
+
+def _blocking_obstacle_near(observation: dict[str, Any], position: dict[str, float]) -> dict[str, Any] | None:
+    entities = observation.get("entities")
+    if not isinstance(entities, list):
+        return None
+    blockers = []
+    for entity in entities:
+        if not isinstance(entity, dict):
+            continue
+        entity_type = str(entity.get("type") or "")
+        name = str(entity.get("name") or "")
+        if entity_type not in {"simple-entity", "tree", "cliff"} and not name.endswith("rock"):
+            continue
+        entity_position = _position(entity)
+        if distance(entity_position, position) <= 4.0:
+            blockers.append(entity)
+    return _nearest_to(blockers, position) if blockers else None
+
+
+def _layout_has_unrelated_blocker(observation: dict[str, Any], layout: dict[str, Any]) -> bool:
+    layout_units = {
+        entity.get("unit_number")
+        for entity in [layout.get("belt1"), layout.get("belt2"), layout.get("inserter"), layout.get("furnace"), layout.get("drill")]
+        if isinstance(entity, dict)
+    }
+    footprint = [
+        layout["drill_position"],
+        layout["belt1_position"],
+        layout["belt2_position"],
+        layout["inserter_position"],
+        layout["furnace_position"],
+    ]
+    entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
+    for entity in entities:
+        if not isinstance(entity, dict) or entity.get("unit_number") in layout_units:
+            continue
+        name = str(entity.get("name") or "")
+        entity_type = str(entity.get("type") or "")
+        if name not in {"character", "transport-belt", "burner-inserter", "stone-furnace", "burner-mining-drill"}:
+            continue
+        threshold = 4.0 if name in {"stone-furnace", "burner-mining-drill"} else 2.0
+        entity_pos = _position(entity)
+        if any(distance(entity_pos, pos) < threshold for pos in footprint):
+            return True
+    return False
 
 
 def _select_belt_smelting_layout(observation: dict[str, Any]) -> dict[str, Any] | None:
@@ -939,9 +1128,11 @@ def _select_belt_smelting_layout(observation: dict[str, Any]) -> dict[str, Any] 
             if not isinstance(entity, dict):
                 continue
             name = str(entity.get("name") or "")
+            entity_type = str(entity.get("type") or "")
             if name in {"character", "transport-belt", "burner-inserter", "stone-furnace", "burner-mining-drill"}:
                 entity_pos = _position(entity)
-                if any(distance(entity_pos, pos) < 2.0 for pos in footprint):
+                threshold = 4.0 if name in {"stone-furnace", "burner-mining-drill"} else 2.0
+                if any(distance(entity_pos, pos) < threshold for pos in footprint):
                     blocked = True
                     break
         if not blocked:
@@ -1288,6 +1479,80 @@ class ResearchAutomationSkill:
             return None
 
         return self.power_skill._ensure_item_quantity(observation, player, item, quantity)
+
+
+class ResearchTechnologySkill:
+    """Research the next early technology using existing powered labs and red science."""
+
+    def __init__(self, technology: str = "logistics") -> None:
+        self.technology = technology
+        self.bootstrap_skill = ResearchAutomationSkill()
+
+    def next_action(self, observation: dict[str, Any]) -> PlannerDecision:
+        technology = _technology_state(observation, self.technology)
+        if bool(technology.get("researched")):
+            return PlannerDecision(None, f"{self.technology} research completed", done=True)
+
+        if not bool(_technology_state(observation, "automation").get("researched")) or _find_research_lab(observation) is None:
+            decision = self.bootstrap_skill.next_action(observation)
+            if decision.done:
+                return PlannerDecision({"type": "wait", "ticks": 120}, "wait for research bootstrap observation to settle")
+            return decision
+
+        power_block = _find_steam_power_block(observation)
+        if not _steam_power_ready(power_block):
+            decision = SetupPowerSkill().next_action(observation)
+            if decision.done:
+                return PlannerDecision({"type": "wait", "ticks": 120}, "wait for power observation to settle")
+            return decision
+
+        if _current_research(observation) != self.technology:
+            return PlannerDecision(
+                {"type": "research", "technology": self.technology},
+                f"set current research to {self.technology}",
+            )
+
+        lab = _find_research_lab(observation)
+        if lab is None:
+            return PlannerDecision(None, "cannot find a lab for research")
+
+        ingredients = technology.get("ingredients") if isinstance(technology.get("ingredients"), dict) else {}
+        if not ingredients:
+            return PlannerDecision({"type": "research", "technology": self.technology}, f"unlock trigger technology {self.technology}")
+
+        player = player_position(observation)
+        research_progress = _research_progress(observation)
+        for pack_name in sorted(ingredients):
+            if pack_name != "automation-science-pack":
+                return PlannerDecision(None, f"research pack path is not implemented yet: {pack_name}")
+            lab_pack_count = entity_item_count(lab, pack_name)
+            pack_goal = _research_pack_goal(observation, self.technology, pack_name)
+            packs_needed = max(1, pack_goal - int(research_progress * pack_goal))
+            if lab_pack_count > 0:
+                return PlannerDecision({"type": "wait", "ticks": 600}, f"wait for lab to consume {pack_name}")
+
+            inventory_packs = inventory_count(observation, pack_name)
+            if inventory_packs > 0:
+                lab_position = _position(lab)
+                if distance(player, lab_position) > 20:
+                    return PlannerDecision({"type": "move_to", "position": lab_position}, f"move near lab to insert {pack_name}")
+                return PlannerDecision(
+                    {
+                        "type": "insert",
+                        "item": pack_name,
+                        "count": min(packs_needed, inventory_packs),
+                        "unit_number": lab.get("unit_number"),
+                        "name": "lab",
+                        "position": lab_position,
+                    },
+                    f"insert {pack_name} into lab for {self.technology}",
+                )
+
+            science_decision = AutomationScienceSkill(target_count=packs_needed).next_action(observation)
+            if not science_decision.done:
+                return science_decision
+
+        return PlannerDecision({"type": "wait", "ticks": 600}, f"wait for {self.technology} research progress")
 
 
 class CircuitAutomationSkill:

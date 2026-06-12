@@ -9,6 +9,7 @@ from typing import Any
 
 IMPLEMENTED_SKILLS = {
     "produce_iron_plate": "IronPlateSkill",
+    "expand_iron_smelting": "ExpandIronSmeltingSkill",
     "produce_copper_plate": "CopperPlateSkill",
     "produce_automation_science_pack": "AutomationScienceSkill",
     "produce_electronic_circuit": "ElectronicCircuitSkill",
@@ -16,6 +17,7 @@ IMPLEMENTED_SKILLS = {
     "setup_power": "SetupPowerSkill",
     "research_automation": "ResearchAutomationSkill",
     "automate_electronic_circuit_line": "CircuitAutomationSkill",
+    "research_logistics": "ResearchTechnologySkill",
 }
 
 

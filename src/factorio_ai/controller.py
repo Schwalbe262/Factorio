@@ -22,8 +22,10 @@ from .planner import (
     CircuitAutomationSkill,
     CopperPlateSkill,
     ElectronicCircuitSkill,
+    ExpandIronSmeltingSkill,
     IronPlateSkill,
     ResearchAutomationSkill,
+    ResearchTechnologySkill,
     SetupPowerSkill,
 )
 from .rcon import FactorioRconClient
@@ -234,6 +236,37 @@ class FactorioController:
             log_path=log_path,
         )
 
+    def run_logistics_research_mvp(
+        self,
+        max_steps: int = 2200,
+        log_path: Path | None = None,
+    ) -> RunSummary:
+        return self._run_skill(
+            skill=ResearchTechnologySkill("logistics"),
+            target_item="automation-science-pack",
+            target=20,
+            goal="research_logistics",
+            max_steps=max_steps,
+            log_prefix="logistics-research-mvp",
+            log_path=log_path,
+        )
+
+    def run_expand_iron_smelting_mvp(
+        self,
+        target_rate: int = 37,
+        max_steps: int = 900,
+        log_path: Path | None = None,
+    ) -> RunSummary:
+        return self._run_skill(
+            skill=ExpandIronSmeltingSkill(float(target_rate)),
+            target_item="iron-plate",
+            target=target_rate,
+            goal="expand_iron_smelting",
+            max_steps=max_steps,
+            log_prefix="expand-iron-smelting-mvp",
+            log_path=log_path,
+        )
+
     def strategy_decision(self, objective: str, require_llm: bool = False) -> dict[str, Any]:
         observation = self.observe()
         production_targets = load_targets(self.cfg.runtime_dir, objective).per_minute
@@ -363,6 +396,16 @@ class FactorioController:
                 "max_steps": max_steps or 700,
                 "log_prefix": "strategy-belt-smelting",
             }
+        if skill_name == "expand_iron_smelting":
+            target = target_count or 37
+            return {
+                "skill": ExpandIronSmeltingSkill(float(target)),
+                "target_item": "iron-plate",
+                "target": target,
+                "goal": skill_name,
+                "max_steps": max_steps or 900,
+                "log_prefix": "strategy-expand-iron-smelting",
+            }
         if skill_name == "setup_power":
             return {
                 "skill": SetupPowerSkill(),
@@ -390,6 +433,15 @@ class FactorioController:
                 "goal": skill_name,
                 "max_steps": max_steps or 1800,
                 "log_prefix": "strategy-circuit-automation",
+            }
+        if skill_name == "research_logistics":
+            return {
+                "skill": ResearchTechnologySkill("logistics"),
+                "target_item": "automation-science-pack",
+                "target": 20,
+                "goal": skill_name,
+                "max_steps": max_steps or 2200,
+                "log_prefix": "strategy-logistics-research",
             }
         return None
 
