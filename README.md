@@ -41,6 +41,7 @@ implements that skill as a normal code change.
 - Run a reusable rule-based `produce_copper_plate` skill until copper plates exist in inventory or machine outputs.
 - Run a rule-based `produce_automation_science_pack` skill until at least 5 automation science packs exist.
 - Run a rule-based `produce_electronic_circuit` skill for early hand-crafted green circuits.
+- Run one strategic step with `run-strategy-step`, which asks the strategic layer for a skill and executes it only if a local executor exists.
 - Ask the strategic layer for the next high-level skill with `factorio-ai strategy`.
 - Submit planner tasks to a Slurm worker queue when configured, with local rule-based fallback.
 
@@ -104,6 +105,12 @@ Run the electronic circuit MVP loop:
 
 ```powershell
 factorio-ai run-circuit-mvp --target 5
+```
+
+Run one strategy-selected skill:
+
+```powershell
+factorio-ai run-strategy-step --objective launch_rocket_program
 ```
 
 Or run the automation science MVP loop from a fresh server save:
@@ -203,6 +210,23 @@ materials are available. The current catalog exposes `plan_rail_network` and `bu
 as future skills; until those executors exist, selecting them records a missing-skill backlog entry
 instead of faking rail construction.
 
+## Automation Skill Boundary
+
+The first material skills can still hand-mine and hand-craft because they bootstrap a new world.
+That is not enough for rocket-scale play. Factory growth must move to automation skills that build
+working production blocks:
+
+- miners extract ore;
+- belts move items between blocks;
+- inserters move items into and out of machines;
+- furnaces smelt plates;
+- assembling machines craft intermediates;
+- power poles and fuel keep the block running.
+
+For this reason, `expand_iron_smelting`, `build_belt_smelting_line`, and
+`automate_electronic_circuit_line` are separate skill contracts. Until those executors exist, the
+strategy runner reports them as missing instead of substituting a hand-crafting routine.
+
 ## Learning Loop
 
 The model should improve over time instead of relying only on a commercial LLM forever.
@@ -256,6 +280,15 @@ Submit a test task:
 ```powershell
 factorio-ai slurm-submit-test
 ```
+
+Check whether the AUTO allocation can actually run LLM strategy requests:
+
+```powershell
+factorio-ai slurm-llm-status
+```
+
+`slurm-status` only proves that the allocation exists. `slurm-llm-status` checks whether
+`FACTORIO_AI_LLM_BASE_URL` and `FACTORIO_AI_LLM_MODEL` are visible inside the attached Slurm task.
 
 ## GitHub Workflow
 

@@ -50,11 +50,30 @@ SKILL_CATALOG: dict[str, SkillContract] = {
     ),
     "expand_iron_smelting": SkillContract(
         name="expand_iron_smelting",
-        description="Build additional iron ore mining and smelting capacity.",
+        description="Build additional iron ore mining and smelting capacity with drills, furnaces, inserters, and belts.",
         executor="future ExpandSmeltingSkill",
-        preconditions=["iron ore patch identified", "fuel or power available", "furnaces/drills craftable or available"],
-        completion=["sustained iron plate output exceeds downstream demand"],
+        preconditions=[
+            "iron ore patch identified",
+            "fuel or power available",
+            "furnaces, drills, inserters, and belts craftable or available",
+        ],
+        completion=["sustained iron plate output on belts or machine outputs exceeds downstream demand"],
         llm_scope="Choose this when downstream goals are blocked by low iron throughput.",
+    ),
+    "build_belt_smelting_line": SkillContract(
+        name="build_belt_smelting_line",
+        description="Build a belt-fed smelting line using miners, belts, inserters, and furnaces.",
+        executor="future BeltSmeltingLineSkill",
+        preconditions=[
+            "ore patch and coal or power source identified",
+            "transport belts, inserters, miners, and furnaces available or craftable",
+            "site selected with room for input/output belts and future expansion",
+        ],
+        completion=["ore is mined, moved by belt or direct insertion, smelted, and output as plates"],
+        llm_scope=(
+            "Choose product, location, orientation, and throughput target. "
+            "Executor places exact miners, belts, inserters, furnaces, and fuel/power connections."
+        ),
     ),
     "produce_copper_plate": SkillContract(
         name="produce_copper_plate",
@@ -87,6 +106,22 @@ SKILL_CATALOG: dict[str, SkillContract] = {
         preconditions=["iron plates available or producible", "copper plates available or producible", "copper cable recipe available"],
         completion=["electronic circuits exist in inventory"],
         llm_scope="Choose this after diagnosing whether iron or copper supply is the real bottleneck.",
+    ),
+    "automate_electronic_circuit_line": SkillContract(
+        name="automate_electronic_circuit_line",
+        description="Build an assembler-based green circuit line fed by iron plates and copper cable.",
+        executor="future CircuitAutomationSkill",
+        preconditions=[
+            "automation researched",
+            "electric power available",
+            "assembling machines, inserters, belts, and power poles available or craftable",
+            "iron plate and copper plate supply lines exist or are planned",
+        ],
+        completion=["assemblers continuously output electronic circuits without hand crafting"],
+        llm_scope=(
+            "Choose ratios, site, input source, and expansion direction. "
+            "Executor validates exact assembler, belt, inserter, and pole placement."
+        ),
     ),
     "plan_factory_site": SkillContract(
         name="plan_factory_site",

@@ -44,6 +44,36 @@ class RunSummary:
     def electronic_circuit_count(self) -> int:
         return self.item_count
 
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "ok": self.ok,
+            "reason": self.reason,
+            "steps": self.steps,
+            "itemCount": self.item_count,
+            "itemName": self.item_name,
+            "logPath": str(self.log_path),
+        }
+
+
+@dataclass
+class StrategyStepSummary:
+    ok: bool
+    reason: str
+    objective: str
+    selected_skill: str
+    strategy: dict[str, Any]
+    run: RunSummary | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "ok": self.ok,
+            "reason": self.reason,
+            "objective": self.objective,
+            "selectedSkill": self.selected_skill,
+            "strategy": self.strategy,
+            "run": self.run.to_dict() if self.run else None,
+        }
+
 
 class FactorioController:
     def __init__(self, cfg: AppConfig) -> None:
@@ -167,6 +197,92 @@ class FactorioController:
         if require_llm and result.get("source") != "llm":
             raise RuntimeError(f"LLM strategy was required but source was {result.get('source')}")
         return annotate_strategy_with_skill_status(result, runtime_dir=self.cfg.runtime_dir)
+
+    def run_strategy_step(
+        self,
+        objective: str = "launch_rocket_program",
+        require_llm: bool = False,
+        target_count: int | None = None,
+        max_steps: int | None = None,
+    ) -> StrategyStepSummary:
+        strategy = self.strategy_decision(objective, require_llm=require_llm)
+        selected = str(strategy.get("selected_skill") or strategy.get("selected_goal") or "")
+        status = strategy.get("skill_status") if isinstance(strategy.get("skill_status"), dict) else {}
+        if status.get("codex_required"):
+            return StrategyStepSummary(
+                ok=False,
+                reason=f"executor missing for selected skill: {selected}",
+                objective=objective,
+                selected_skill=selected,
+                strategy=strategy,
+            )
+
+        config = self._skill_run_config(selected, target_count=target_count, max_steps=max_steps)
+        if config is None:
+            return StrategyStepSummary(
+                ok=False,
+                reason=f"selected skill is not executable by the local runner: {selected}",
+                objective=objective,
+                selected_skill=selected,
+                strategy=strategy,
+            )
+        run = self._run_skill(**config)
+        return StrategyStepSummary(
+            ok=run.ok,
+            reason=run.reason,
+            objective=objective,
+            selected_skill=selected,
+            strategy=strategy,
+            run=run,
+        )
+
+    def _skill_run_config(
+        self,
+        skill_name: str,
+        target_count: int | None = None,
+        max_steps: int | None = None,
+    ) -> dict[str, Any] | None:
+        if skill_name == "produce_iron_plate":
+            target = target_count or 10
+            return {
+                "skill": IronPlateSkill(target),
+                "target_item": "iron-plate",
+                "target": target,
+                "goal": skill_name,
+                "max_steps": max_steps or 200,
+                "log_prefix": "strategy-iron",
+            }
+        if skill_name == "produce_copper_plate":
+            target = target_count or 10
+            return {
+                "skill": CopperPlateSkill(target),
+                "target_item": "copper-plate",
+                "target": target,
+                "goal": skill_name,
+                "max_steps": max_steps or 250,
+                "log_prefix": "strategy-copper",
+            }
+        if skill_name == "produce_automation_science_pack":
+            target = target_count or 5
+            return {
+                "skill": AutomationScienceSkill(target),
+                "target_item": "automation-science-pack",
+                "target": target,
+                "goal": skill_name,
+                "max_steps": max_steps or 500,
+                "log_prefix": "strategy-science",
+            }
+        if skill_name == "produce_electronic_circuit":
+            target = target_count or 5
+            return {
+                "skill": ElectronicCircuitSkill(target),
+                "target_item": "electronic-circuit",
+                "target": target,
+                "goal": skill_name,
+                "max_steps": max_steps or 500,
+                "log_prefix": "strategy-circuit",
+            }
+        return None
 
     def _run_skill(
         self,

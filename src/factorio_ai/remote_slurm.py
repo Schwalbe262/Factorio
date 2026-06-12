@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import tarfile
 import tempfile
@@ -23,6 +24,13 @@ DEFAULT_KEY_NAME = "r1jae262.pem"
 DEFAULT_REMOTE_DIR = "~/kakao-bot-worker"
 DEFAULT_JOB_NAME = "AUTO"
 DEFAULT_CONDA_ENV = "factorio-ai"
+LLM_ENV_VARS = (
+    "FACTORIO_AI_LLM_BASE_URL",
+    "FACTORIO_AI_LLM_MODEL",
+    "FACTORIO_AI_LLM_API_KEY",
+    "FACTORIO_AI_LLM_GUIDED_JSON",
+    "FACTORIO_AI_LLM_TIMEOUT",
+)
 
 
 class RemoteSlurmError(RuntimeError):
@@ -165,6 +173,74 @@ fi
         timeout=45,
     )
     return {"ok": True, "remoteDir": remote_dir, "output": output}
+
+
+def llm_status(cfg: RemoteSlurmConfig | None = None) -> dict[str, Any]:
+    cfg = cfg or config()
+    remote_dir = resolve_remote_dir(cfg)
+    local_env = _llm_env_presence(os.environ)
+    probe_code = (
+        "import json, os, shutil; "
+        f"names = {json.dumps(list(LLM_ENV_VARS))}; "
+        "env = {name: bool(os.getenv(name)) for name in names}; "
+        "print(json.dumps({'env': env, 'vllm_command': shutil.which('vllm') is not None}, separators=(',', ':')))"
+    )
+    inner_command = (
+        "set -euo pipefail; "
+        f"{_attached_env_setup()}"
+        f"python3 -c {shlex.quote(probe_code)}"
+    )
+    try:
+        output = _run_remote(
+            f"""set -euo pipefail
+JOB_NAME={json.dumps(cfg.job_name)}
+INNER_COMMAND={json.dumps(inner_command)}
+JOB_ID="$(squeue -h -u "$USER" -n "$JOB_NAME" -t R -o "%i" | head -1 | tr -d '[:space:]')"
+if [[ -z "$JOB_ID" ]]; then
+  echo "{{\\"job_running\\":false}}"
+  exit 0
+fi
+srun --jobid="$JOB_ID" --overlap -N1 -n1 -c1 bash -lc "$INNER_COMMAND" < /dev/null
+""",
+            cfg,
+            timeout=90,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "ok": True,
+            "remoteDir": remote_dir,
+            "local_env": local_env,
+            "remote": {"job_running": False, "error": f"{type(exc).__name__}: {exc}"},
+            "llm_ready": False,
+            "missing": ["running AUTO job with LLM env"],
+        }
+
+    remote_payload: dict[str, Any] = {"job_running": True}
+    for line in reversed(output.splitlines()):
+        line = line.strip()
+        if not line.startswith("{") or not line.endswith("}"):
+            continue
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            remote_payload.update(parsed)
+            break
+    remote_env = remote_payload.get("env") if isinstance(remote_payload.get("env"), dict) else {}
+    missing = [
+        name
+        for name in ("FACTORIO_AI_LLM_BASE_URL", "FACTORIO_AI_LLM_MODEL")
+        if not remote_env.get(name)
+    ]
+    return {
+        "ok": True,
+        "remoteDir": remote_dir,
+        "local_env": local_env,
+        "remote": remote_payload,
+        "llm_ready": not missing,
+        "missing": missing,
+    }
 
 
 def cancel(cfg: RemoteSlurmConfig | None = None) -> dict[str, Any]:
@@ -354,7 +430,17 @@ def _request_task_via_attached_srun(
     remote_dir = resolve_remote_dir(cfg)
     task_name = f"{task['id']}.json"
     result_name = f"{task['id']}.result.json"
+    task_path = f"{remote_dir}/{task_name}"
+    result_path = f"{remote_dir}/{result_name}"
     payload = base64.b64encode(json.dumps(task, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).decode("ascii")
+    inner_command = (
+        "set -euo pipefail; "
+        f"{_attached_env_setup()}"
+        f"source ~/miniconda3/etc/profile.d/conda.sh && "
+        f"conda activate {shlex.quote(cfg.conda_env)} && "
+        f"cd {shlex.quote(remote_dir + '/factorio-ai')} && "
+        f"python -m factorio_ai.slurm_worker --task {shlex.quote(task_path)} --result {shlex.quote(result_path)}"
+    )
     output = _run_remote(
         f"""set -euo pipefail
 REMOTE_DIR={json.dumps(remote_dir)}
@@ -362,6 +448,7 @@ JOB_NAME={json.dumps(cfg.job_name)}
 TASK_NAME={json.dumps(task_name)}
 RESULT_NAME={json.dumps(result_name)}
 PAYLOAD={json.dumps(payload)}
+INNER_COMMAND={json.dumps(inner_command)}
 JOB_ID="$(squeue -h -u "$USER" -n "$JOB_NAME" -t R -o "%i" | head -1 | tr -d '[:space:]')"
 if [[ -z "$JOB_ID" ]]; then
   echo "__ERROR__:running job not found for $JOB_NAME"
@@ -377,7 +464,7 @@ from pathlib import Path
 Path(sys.argv[1]).write_bytes(base64.b64decode(sys.argv[2]) + b"\\n")
 PY
 rm -f "$RESULT_PATH"
-srun --jobid="$JOB_ID" --overlap -N1 -n1 -c1 bash -lc "source ~/miniconda3/etc/profile.d/conda.sh && conda activate {cfg.conda_env} && cd '$REMOTE_DIR/factorio-ai' && python -m factorio_ai.slurm_worker --task '$TASK_PATH' --result '$RESULT_PATH'" < /dev/null
+srun --jobid="$JOB_ID" --overlap -N1 -n1 -c1 bash -lc "$INNER_COMMAND" < /dev/null
 cat "$RESULT_PATH"
 rm -f "$TASK_PATH" "$RESULT_PATH"
 """,
@@ -426,6 +513,19 @@ def _int_env(name: str, fallback: int, minimum: int = 0) -> int:
     except ValueError:
         return fallback
     return value if value >= minimum else fallback
+
+
+def _llm_env_presence(env: Any) -> dict[str, bool]:
+    return {name: bool(env.get(name)) for name in LLM_ENV_VARS}
+
+
+def _attached_env_setup() -> str:
+    commands = []
+    for name in LLM_ENV_VARS:
+        value = os.getenv(name)
+        if value:
+            commands.append(f"export {name}={shlex.quote(value)}")
+    return ("; ".join(commands) + "; ") if commands else ""
 
 
 def _ssh_args(cfg: RemoteSlurmConfig) -> list[str]:

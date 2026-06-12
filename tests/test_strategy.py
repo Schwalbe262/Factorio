@@ -32,6 +32,8 @@ class StrategyTests(unittest.TestCase):
     def test_catalog_exposes_llm_scope(self):
         catalog = skill_catalog_payload()
         self.assertTrue(any(item["name"] == "produce_electronic_circuit" for item in catalog))
+        self.assertTrue(any(item["name"] == "build_belt_smelting_line" for item in catalog))
+        self.assertTrue(any(item["name"] == "automate_electronic_circuit_line" for item in catalog))
         self.assertTrue(any(item["name"] == "build_rail_supply_line" for item in catalog))
         self.assertEqual(
             next(item for item in catalog if item["name"] == "produce_electronic_circuit")["executor"],

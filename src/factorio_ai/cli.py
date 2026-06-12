@@ -47,6 +47,15 @@ def main(argv: list[str] | None = None) -> None:
     strategy_parser.add_argument("--objective", default="launch_rocket_program")
     strategy_parser.add_argument("--require-llm", action="store_true")
 
+    strategy_step_parser = subparsers.add_parser(
+        "run-strategy-step",
+        help="Ask the strategic layer for one high-level skill and execute it if implemented",
+    )
+    strategy_step_parser.add_argument("--objective", default="launch_rocket_program")
+    strategy_step_parser.add_argument("--require-llm", action="store_true")
+    strategy_step_parser.add_argument("--target", type=int, help="Override the selected skill item target count")
+    strategy_step_parser.add_argument("--max-steps", type=int, help="Override the selected skill max step count")
+
     web_parser = subparsers.add_parser("web", help="Serve the Factorio production monitor at /factorio")
     web_parser.add_argument("--host", default="0.0.0.0")
     web_parser.add_argument("--port", type=int, default=18889)
@@ -74,6 +83,7 @@ def main(argv: list[str] | None = None) -> None:
     subparsers.add_parser("slurm-deploy", help="Deploy project source to the Slurm remote directory")
     subparsers.add_parser("slurm-start-worker", help="Submit the persistent Slurm worker job")
     subparsers.add_parser("slurm-status", help="Print Slurm worker status")
+    subparsers.add_parser("slurm-llm-status", help="Print Slurm AUTO LLM readiness")
     subparsers.add_parser("slurm-cancel", help="Cancel the Slurm worker job")
     subparsers.add_parser("slurm-submit-test", help="Submit a planner test task to the Slurm worker")
 
@@ -135,6 +145,24 @@ def main(argv: list[str] | None = None) -> None:
             "on",
         }
         print_json(FactorioController(cfg).strategy_decision(args.objective, require_llm=require_llm))
+        return
+
+    if args.command == "run-strategy-step":
+        require_llm = args.require_llm or os.getenv("FACTORIO_AI_REQUIRE_LLM_STRATEGY", "").lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        summary = FactorioController(cfg).run_strategy_step(
+            objective=args.objective,
+            require_llm=require_llm,
+            target_count=args.target,
+            max_steps=args.max_steps,
+        )
+        print_json(summary.to_dict())
+        if not summary.ok:
+            raise SystemExit(1)
         return
 
     if args.command == "web":
@@ -230,6 +258,10 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.command == "slurm-status":
         print_json(remote_slurm.status())
+        return
+
+    if args.command == "slurm-llm-status":
+        print_json(remote_slurm.llm_status())
         return
 
     if args.command == "slurm-cancel":
