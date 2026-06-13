@@ -40,6 +40,20 @@ If the strategic LLM selects a skill whose executor does not exist yet, the cont
 or improvise game actions. It records the missing skill in `runtime/missing-skills.jsonl`; Codex then
 implements that skill as a normal code change.
 
+## LLM Context Budget
+
+Do not confuse the Codex/handoff context with the local Slurm LLM prompt context.
+
+- `README.md`, `AGENT_HANDOFF.md`, and similar documents are long-form handoff material for humans,
+  Codex, and other coding agents. They are not injected wholesale into every strategy request.
+- The active 4B and 9B Slurm workers currently run vLLM with `--max-model-len 4096` for stability on
+  one GPU. The 27B comparison worker is queued with `--max-model-len 8192`.
+- Strategy requests send a compact current-state payload: objective, inventory, target deficits,
+  bottlenecks, site/link summaries, power state, research state, threats, and implemented skill names.
+- Long-term Factorio knowledge should be added through structured recipe/technology data, design
+  pattern summaries, and retrieval of relevant blueprint notes, not by appending a 300k markdown file
+  to every LLM call.
+
 ## Current MVP
 
 - Observe player position, inventory, nearby resources, nearby entities, and craftable recipes.
@@ -114,6 +128,7 @@ run_factorio_watch_gui.bat
 run_factorio_no_mod_server.bat
 run_factorio_no_mod_watch_gui.bat
 run_factorio_no_mod_iron_mvp.bat
+run_factorio_no_mod_llm_autopilot.bat
 ```
 
 `run_factorio_non_gui.bat` starts the development server in a separate window and repeatedly executes
@@ -125,6 +140,9 @@ that lock before continuing. Close the Factorio window when inspection is done.
 vanilla-compatible save, starts a LAN/RCON server, and opens a GUI client connected to it. Other
 players can join the LAN server without installing the Factorio AI mod, assuming their official
 Factorio/Space Age content matches.
+`run_factorio_no_mod_llm_autopilot.bat` starts the continuous no-custom-mod autopilot with
+Slurm LLM strategy required. It fails instead of silently falling back to heuristics when the
+active 4B worker is not ready.
 
 The older modded development server is still launched internally with `--start-server` plus GUI
 `--mp-connect`, but it is configured for one local review client by default. Use it for fast skill
@@ -273,6 +291,12 @@ Use this for production runs when a real LLM endpoint is configured:
 $env:FACTORIO_AI_SLURM_ENABLED=1
 $env:FACTORIO_AI_REQUIRE_LLM_STRATEGY=1
 factorio-ai strategy --objective "launch_rocket_program"
+```
+
+For the no-custom-mod autopilot path, use:
+
+```cmd
+run_factorio_no_mod_llm_autopilot.bat
 ```
 
 ## Achievement-Compatible Track
@@ -501,26 +525,77 @@ Common environment variables:
 - `FACTORIO_AI_SLURM_REMOTE_DIR=~/factorio-ai-worker`
 - `FACTORIO_AI_SLURM_JOB_NAME=factorio-ai-worker`
 - `FACTORIO_AI_SLURM_ENABLED=1`
-- `FACTORIO_AI_SLURM_GPUS_PER_NODE=3`
-- `FACTORIO_AI_SLURM_GRES=gpu:a6000ada:3`
-- `FACTORIO_AI_SLURM_PARTITION=gpu3`
-- `FACTORIO_AI_VLLM_MODEL=Qwen/Qwen3.6-27B-FP8`
+- `FACTORIO_AI_SLURM_GPUS_PER_NODE=1`
+- `FACTORIO_AI_SLURM_GRES=gpu:1`
+- `FACTORIO_AI_SLURM_PARTITION=gpu4,gpu2,gpu1`
+- `FACTORIO_AI_VLLM_MODEL=Qwen/Qwen3.5-4B`
 - `FACTORIO_AI_LLM_BASE_URL=http://127.0.0.1:8000/v1`
 - `FACTORIO_AI_LLM_MODEL=<model-name>`
 
-Start the dedicated Factorio worker:
+Start or reuse the current active 4B worker:
+
+```cmd
+run_factorio_slurm_llm_4b_worker.bat
+```
+
+After code changes, do not cancel and resubmit the worker just to verify Python-side logic. Keep the
+existing allocation and attach a one-shot benchmark with `srun`:
+
+```cmd
+run_factorio_slurm_llm_4b_attached_benchmark.bat
+```
+
+Equivalent PowerShell:
 
 ```powershell
 $env:FACTORIO_AI_SLURM_ENABLED="1"
 $env:FACTORIO_AI_SLURM_REMOTE_DIR="~/factorio-ai-worker"
 $env:FACTORIO_AI_SLURM_JOB_NAME="factorio-ai-worker"
-$env:FACTORIO_AI_SLURM_GPUS_PER_NODE="3"
-$env:FACTORIO_AI_SLURM_GRES="gpu:a6000ada:3"
-$env:FACTORIO_AI_SLURM_PARTITION="gpu3"
-$env:FACTORIO_AI_VLLM_MODEL="Qwen/Qwen3.6-27B-FP8"
-$env:FACTORIO_AI_VLLM_ARGS="--tensor-parallel-size 3 --max-model-len 8192 --gpu-memory-utilization 0.85"
+$env:FACTORIO_AI_SLURM_GPUS_PER_NODE="1"
+$env:FACTORIO_AI_SLURM_GRES="gpu:1"
+$env:FACTORIO_AI_SLURM_PARTITION="gpu4,gpu2,gpu1"
+$env:FACTORIO_AI_VLLM_MODEL="Qwen/Qwen3.5-4B"
+$env:FACTORIO_AI_VLLM_ARGS="--max-model-len 4096 --gpu-memory-utilization 0.85 --enforce-eager"
+$env:FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER="0"
 factorio-ai slurm-start-worker
 ```
+
+The larger 9B and 27B workers are kept as separate worker jobs so they can wait or run without
+blocking the active 4B worker:
+
+```cmd
+run_factorio_slurm_llm_9b_worker.bat
+```
+
+For code-change verification on the already running 9B allocation:
+
+```cmd
+run_factorio_slurm_llm_9b_attached_benchmark.bat
+```
+
+The 9B worker uses:
+
+- `FACTORIO_AI_SLURM_REMOTE_DIR=~/factorio-ai-worker-9b`
+- `FACTORIO_AI_SLURM_JOB_NAME=factorio-ai-worker-9b`
+- `FACTORIO_AI_SLURM_GPUS_PER_NODE=1`
+- `FACTORIO_AI_SLURM_GRES=gpu:a6000:1`
+- `FACTORIO_AI_SLURM_PARTITION=gpu4`
+- `FACTORIO_AI_VLLM_MODEL=Qwen/Qwen3.5-9B`
+- `FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER=0`
+
+```cmd
+run_factorio_slurm_llm_27b_gpu3_queue.bat
+```
+
+It uses:
+
+- `FACTORIO_AI_SLURM_REMOTE_DIR=~/factorio-ai-worker-27b`
+- `FACTORIO_AI_SLURM_JOB_NAME=factorio-ai-worker-27b`
+- `FACTORIO_AI_SLURM_GPUS_PER_NODE=3`
+- `FACTORIO_AI_SLURM_GRES=gpu:a6000ada:3`
+- `FACTORIO_AI_SLURM_PARTITION=gpu3`
+- `FACTORIO_AI_VLLM_MODEL=Qwen/Qwen3.6-27B-FP8`
+- `FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER=0`
 
 If the worker is pending, `slurm-llm-status` reports `Slurm worker job pending GPU allocation`.
 If it is running without visible CUDA devices, the same command reports `GPU allocation` in
@@ -540,8 +615,8 @@ factorio-ai slurm-llm-status
 
 `slurm-status` only proves that the allocation exists. `slurm-llm-status` checks whether
 `FACTORIO_AI_LLM_BASE_URL` and `FACTORIO_AI_LLM_MODEL` are visible inside the attached Slurm task,
-whether `nvidia-smi -L` sees a GPU, and whether the Factorio AI code has been deployed under the
-remote worker directory.
+whether `nvidia-smi -L` sees a GPU, whether `/v1/models` responds from the LLM endpoint, and whether
+the Factorio AI code has been deployed under the remote worker directory.
 
 ## GitHub Workflow
 

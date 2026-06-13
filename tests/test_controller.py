@@ -1,9 +1,14 @@
+import json
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 from factorio_ai.config import AppConfig
 from factorio_ai.controller import FactorioController, RunSummary, StrategyStepSummary
+from factorio_ai.llm_log import llm_decision_log_path
+from factorio_ai.models import PlannerDecision
 
 
 def test_config(root: Path) -> AppConfig:
@@ -23,6 +28,67 @@ def test_config(root: Path) -> AppConfig:
 
 
 class ControllerTests(unittest.TestCase):
+    def test_required_remote_llm_pending_does_not_submit_strategy_task(self):
+        class FakeController(FactorioController):
+            def observe(self):
+                return {"ok": True, "tick": 1, "inventory": {}, "entities": [], "enemies": [], "research": {}}
+
+        pending_status = {
+            "ok": True,
+            "llm_ready": False,
+            "missing": ["Slurm worker job pending GPU allocation", "GPU allocation"],
+            "remote": {
+                "pending_jobs": [
+                    {
+                        "id": "677406",
+                        "state": "PENDING",
+                        "reason": "(Priority)",
+                        "start_time": "2026-06-19T11:30:00",
+                    }
+                ]
+            },
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cfg = replace(test_config(Path(temp_dir)), slurm_enabled=True)
+            controller = FakeController(cfg)
+            with (
+                patch("factorio_ai.remote_slurm.llm_status", return_value=pending_status) as status,
+                patch("factorio_ai.remote_slurm.request_strategy") as request_strategy,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "remote Slurm LLM not ready"):
+                    controller.strategy_decision("launch_rocket_program", require_llm=True)
+
+            log_path = llm_decision_log_path(cfg.log_dir)
+            rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+        status.assert_called_once()
+        request_strategy.assert_not_called()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["provider"], "remote_slurm")
+        self.assertIn("Slurm worker job pending GPU allocation", rows[0]["error"])
+        self.assertIn("677406", rows[0]["error"])
+
+    def test_remote_action_hint_skips_queue_when_llm_pending(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cfg = replace(test_config(Path(temp_dir)), slurm_enabled=True)
+            controller = FactorioController(cfg)
+            decision = PlannerDecision(
+                action={"type": "wait", "ticks": 60},
+                reason="test",
+                done=False,
+            )
+            with (
+                patch(
+                    "factorio_ai.remote_slurm.llm_status",
+                    return_value={"ok": True, "llm_ready": False, "missing": ["GPU allocation"], "remote": {}},
+                ) as status,
+                patch("factorio_ai.remote_slurm.request_plan") as request_plan,
+            ):
+                action = controller._maybe_apply_remote_hint({}, decision, "produce_iron_plate")
+
+        status.assert_called_once()
+        request_plan.assert_not_called()
+        self.assertEqual(action, {"type": "wait", "ticks": 60})
+
     def test_strategy_runner_maps_implemented_material_skills(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             controller = FactorioController(test_config(Path(temp_dir)))

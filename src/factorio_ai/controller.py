@@ -118,6 +118,8 @@ class AutopilotLoopSummary:
 class FactorioController:
     def __init__(self, cfg: AppConfig) -> None:
         self.cfg = cfg
+        self._remote_llm_status_cache: dict[str, Any] | None = None
+        self._remote_llm_status_cache_until = 0.0
 
     def observe(self) -> dict[str, Any]:
         with self._client() as client:
@@ -352,25 +354,42 @@ class FactorioController:
         if self.cfg.slurm_enabled:
             started = time.monotonic()
             try:
-                from . import remote_slurm
+                status = self._remote_llm_status(refresh=True)
+                if not status.get("llm_ready"):
+                    reason = self._remote_llm_unready_reason(status)
+                    record_llm_decision(
+                        self.cfg.log_dir,
+                        objective=objective,
+                        provider="remote_slurm",
+                        result={"source": "remote_unavailable", "ok": False},
+                        request_summary=request_summary,
+                        error=reason,
+                        latency_ms=int((time.monotonic() - started) * 1000),
+                    )
+                    if require_llm:
+                        raise RuntimeError(f"remote Slurm LLM not ready: {reason}")
+                else:
+                    from . import remote_slurm
 
-                result = remote_slurm.request_strategy(
-                    objective=objective,
-                    observation=observation,
-                    production_targets=production_targets,
-                    available_skills=skill_catalog_payload(),
-                    timeout_seconds=30,
-                )
-                record_llm_decision(
-                    self.cfg.log_dir,
-                    objective=objective,
-                    provider="remote_slurm",
-                    result=result,
-                    request_summary=request_summary,
-                    error="" if result.get("source") == "llm" else "remote Slurm returned non-LLM fallback result",
-                    latency_ms=int((time.monotonic() - started) * 1000),
-                )
+                    result = remote_slurm.request_strategy(
+                        objective=objective,
+                        observation=observation,
+                        production_targets=production_targets,
+                        available_skills=skill_catalog_payload(),
+                        timeout_seconds=30,
+                    )
+                    record_llm_decision(
+                        self.cfg.log_dir,
+                        objective=objective,
+                        provider="remote_slurm",
+                        result=result,
+                        request_summary=request_summary,
+                        error="" if result.get("source") == "llm" else "remote Slurm returned non-LLM fallback result",
+                        latency_ms=int((time.monotonic() - started) * 1000),
+                    )
             except Exception as exc:
+                if require_llm and str(exc).startswith("remote Slurm LLM not ready:"):
+                    raise
                 record_llm_decision(
                     self.cfg.log_dir,
                     objective=objective,
@@ -805,6 +824,9 @@ class FactorioController:
         try:
             from . import remote_slurm
 
+            status = self._remote_llm_status()
+            if not status.get("llm_ready"):
+                return decision.action
             result = remote_slurm.request_plan(
                 observation=observation,
                 legal_actions=[decision.action],
@@ -818,6 +840,38 @@ class FactorioController:
         except (Exception, ActionValidationError):
             return decision.action
         return decision.action
+
+    def _remote_llm_status(self, *, refresh: bool = False) -> dict[str, Any]:
+        now = time.monotonic()
+        if not refresh and self._remote_llm_status_cache is not None and now < self._remote_llm_status_cache_until:
+            return self._remote_llm_status_cache
+
+        from . import remote_slurm
+
+        status = remote_slurm.llm_status()
+        self._remote_llm_status_cache = status
+        self._remote_llm_status_cache_until = now + 30.0
+        return status
+
+    @staticmethod
+    def _remote_llm_unready_reason(status: dict[str, Any]) -> str:
+        missing = status.get("missing") if isinstance(status.get("missing"), list) else []
+        parts = [str(item) for item in missing if str(item)]
+        remote = status.get("remote") if isinstance(status.get("remote"), dict) else {}
+        jobs = remote.get("pending_jobs") or remote.get("jobs")
+        if isinstance(jobs, list) and jobs:
+            job = jobs[0] if isinstance(jobs[0], dict) else {}
+            if isinstance(job, dict):
+                job_bits = [
+                    str(job.get("id") or ""),
+                    str(job.get("state") or ""),
+                    str(job.get("reason") or ""),
+                    str(job.get("start_time") or ""),
+                ]
+                job_text = " ".join(bit for bit in job_bits if bit)
+                if job_text:
+                    parts.append(f"job {job_text}")
+        return "; ".join(parts) if parts else "remote Slurm LLM is not ready"
 
     @staticmethod
     def _write_log(

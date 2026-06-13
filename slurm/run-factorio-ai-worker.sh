@@ -65,6 +65,9 @@ if [[ -n "${FACTORIO_AI_VLLM_MODEL:-}" ]]; then
   VLLM_PORT="${FACTORIO_AI_VLLM_PORT:-8000}"
   export FACTORIO_AI_LLM_BASE_URL="${FACTORIO_AI_LLM_BASE_URL:-http://127.0.0.1:${VLLM_PORT}/v1}"
   export FACTORIO_AI_LLM_MODEL="${FACTORIO_AI_LLM_MODEL:-$FACTORIO_AI_VLLM_MODEL}"
+  if [[ -n "${FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER:-}" ]]; then
+    export VLLM_USE_FLASHINFER_SAMPLER="$FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER"
+  fi
   if [[ -z "$GPU_LIST" ]]; then
     echo "vllm_gpu_unavailable=1"
     echo "gpu_error=$GPU_ERROR"

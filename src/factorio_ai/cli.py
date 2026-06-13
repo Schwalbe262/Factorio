@@ -366,6 +366,16 @@ def main(argv: list[str] | None = None) -> None:
         help="Comma-separated model names visible to the remote LLM server",
     )
     model_benchmark_parser.add_argument("--timeout", type=int, default=300)
+    model_benchmark_parser.add_argument(
+        "--attached",
+        action="store_true",
+        help="Run the benchmark by attaching to an existing running Slurm job with srun instead of the queue worker",
+    )
+    model_benchmark_parser.add_argument(
+        "--no-deploy",
+        action="store_true",
+        help="With --attached, skip deploying the current source before running the one-shot task",
+    )
 
     args = parser.parse_args(argv)
     cfg = load_config(args.config)
@@ -1109,6 +1119,10 @@ def main(argv: list[str] | None = None) -> None:
             "production_targets": {},
             "available_skills": [],
         }
+        if args.attached:
+            os.environ["FACTORIO_AI_SLURM_MODE"] = "attach"
+            if not args.no_deploy:
+                remote_slurm.deploy()
         result = remote_slurm.request_strategy_model_benchmark(payload, models=models, timeout_seconds=args.timeout)
         print_json(result)
         return

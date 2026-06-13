@@ -37,6 +37,7 @@ VLLM_ENV_VARS = (
     "FACTORIO_AI_VLLM_PORT",
     "FACTORIO_AI_VLLM_ARGS",
     "FACTORIO_AI_VLLM_CUDA_VISIBLE_DEVICES",
+    "FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER",
     "FACTORIO_AI_VLLM_STARTUP_SECONDS",
 )
 GPU_ENV_VARS = (
@@ -250,6 +251,8 @@ import json
 import os
 import shutil
 import subprocess
+import urllib.error
+import urllib.request
 
 env_names = {json.dumps(list(LLM_ENV_VARS + VLLM_ENV_VARS))}
 gpu_env_names = {json.dumps(list(GPU_ENV_VARS))}
@@ -272,11 +275,34 @@ if nvidia_smi:
     except Exception as exc:
         gpu_error = f"{{type(exc).__name__}}: {{exc}}"
 
+llm_base_url = os.getenv("FACTORIO_AI_LLM_BASE_URL", "").rstrip("/")
+llm_model = os.getenv("FACTORIO_AI_LLM_MODEL", "")
+llm_endpoint = {{
+    "configured": bool(llm_base_url),
+    "models_ok": False,
+    "model_visible": False,
+    "error": "",
+}}
+if llm_base_url:
+    try:
+        with urllib.request.urlopen(f"{{llm_base_url}}/models", timeout=5) as response:
+            body = json.loads(response.read().decode("utf-8"))
+        llm_endpoint["models_ok"] = True
+        data = body.get("data") if isinstance(body, dict) else []
+        if isinstance(data, list):
+            llm_endpoint["model_visible"] = any(
+                isinstance(item, dict) and item.get("id") == llm_model
+                for item in data
+            )
+    except (OSError, urllib.error.URLError, json.JSONDecodeError, TimeoutError) as exc:
+        llm_endpoint["error"] = f"{{type(exc).__name__}}: {{exc}}"
+
 print(json.dumps({{
     "env": env,
     "env_values": env_values,
     "vllm_command": shutil.which("vllm") is not None,
     "factorio_ai_deployed": os.path.isdir(factorio_ai_path),
+    "llm_endpoint": llm_endpoint,
     "gpu": {{
         "env": gpu_env,
         "nvidia_smi": bool(nvidia_smi),
@@ -384,6 +410,9 @@ srun --jobid="$JOB_ID" --overlap -N1 -n1 -c1 bash -lc "$INNER_COMMAND" < /dev/nu
         missing.append("GPU allocation")
     if not remote_payload.get("factorio_ai_deployed"):
         missing.append("Factorio AI deployment")
+    llm_endpoint = remote_payload.get("llm_endpoint") if isinstance(remote_payload.get("llm_endpoint"), dict) else {}
+    if env_values.get("FACTORIO_AI_LLM_BASE_URL") and not llm_endpoint.get("models_ok"):
+        missing.append("LLM endpoint")
     return {
         "ok": True,
         "remoteDir": remote_dir,
@@ -793,8 +822,8 @@ def _attached_env_setup(remote_dir: str | None = None) -> str:
         commands.append(
             f"if [[ -f {config_path} ]]; then "
             f"while IFS='=' read -r key value; do "
-            f"case \"\\$key\" in FACTORIO_AI_LLM_*|FACTORIO_AI_VLLM_*|FACTORIO_AI_CONDA_ENV) "
-            f"export \"\\$key=\\$value\";; "
+            f"case \"$key\" in FACTORIO_AI_LLM_*|FACTORIO_AI_VLLM_*|FACTORIO_AI_CONDA_ENV) "
+            f"export \"$key=$value\";; "
             f"esac; "
             f"done < {config_path}; "
             f"fi"

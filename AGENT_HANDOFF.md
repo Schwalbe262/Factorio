@@ -188,47 +188,61 @@ $env:SUPERCOMPUTER_WORKER_ENABLED="true"
 
 The bot should log `gres/gpu:1` in the supercomputer worker startup message.
 
-## Current LLM Gap
+## Current LLM Worker State
 
-GPU allocation and vLLM installation are now mostly handled, but strategic LLM is
-not fully live yet.
+The project now uses Factorio-owned Slurm workers instead of the shared Kakao
+`AUTO` job by default.
 
-Expected `slurm-llm-status` before final LLM server startup may show:
-
-```text
-llm_ready=false
-missing:
-- FACTORIO_AI_LLM_BASE_URL
-- FACTORIO_AI_LLM_MODEL
-```
-
-Next engineering step:
-
-1. Start an OpenAI-compatible vLLM server inside an active GPU AUTO allocation,
-   or submit a dedicated Factorio worker job that starts vLLM.
-2. Use a model such as:
+Current active fast worker:
 
 ```text
-Qwen/Qwen3.5-4B
+remote dir: ~/factorio-ai-worker
+job name: factorio-ai-worker
+model: Qwen/Qwen3.5-4B
+GPU request: gres/gpu:1
+partition preference: gpu4,gpu2,gpu1
+vLLM env: FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER=0
 ```
 
-3. Set:
+Current medium comparison worker:
 
-```powershell
-$env:FACTORIO_AI_LLM_BASE_URL="http://127.0.0.1:8000/v1"
-$env:FACTORIO_AI_LLM_MODEL="Qwen/Qwen3.5-4B"
+```text
+remote dir: ~/factorio-ai-worker-9b
+job name: factorio-ai-worker-9b
+model: Qwen/Qwen3.5-9B
+GPU request: gres/gpu:a6000:1
+partition: gpu4
+vLLM env: FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER=0
 ```
 
-4. Re-run:
+Current large queued worker:
 
-```powershell
-python -m factorio_ai.cli slurm-llm-status
-python -m factorio_ai.cli slurm-submit-model-benchmark --models Qwen/Qwen3.5-4B --timeout 120
+```text
+remote dir: ~/factorio-ai-worker-27b
+job name: factorio-ai-worker-27b
+model: Qwen/Qwen3.6-27B-FP8
+GPU request: gres/gpu:a6000ada:3
+partition: gpu3
+vLLM env: FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER=0
 ```
 
-Important: the existing attached `srun` path can execute Factorio AI code inside
-AUTO, but it does not yet manage a persistent vLLM server lifecycle inside the
-Kakao AUTO worker. Implementing that lifecycle is a likely next part.
+Useful local commands:
+
+```cmd
+run_factorio_slurm_llm_4b_worker.bat
+run_factorio_slurm_llm_4b_attached_benchmark.bat
+run_factorio_slurm_llm_9b_worker.bat
+run_factorio_slurm_llm_9b_attached_benchmark.bat
+run_factorio_slurm_llm_27b_gpu3_queue.bat
+run_factorio_no_mod_llm_autopilot.bat
+```
+
+`slurm-llm-status` now checks LLM env, visible GPU, deployment, and whether the
+OpenAI-compatible `/v1/models` endpoint responds from inside the allocation.
+`run_factorio_no_mod_llm_autopilot.bat` requires the active Slurm LLM strategy path, so it
+does not silently continue with heuristic strategy when the worker is unavailable.
+For code-only validation, prefer the attached benchmark BATs. They deploy current source and use
+`srun --jobid` against the existing allocation, avoiding `sbatch` resubmission and GPU queue churn.
 
 ## Factorio Runtime Commands
 

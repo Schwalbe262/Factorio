@@ -1,3 +1,4 @@
+import json
 import unittest
 from unittest.mock import patch
 
@@ -10,7 +11,8 @@ from factorio_ai.remote_slurm import (
     _worker_env_values,
     config,
 )
-from factorio_ai.slurm_worker import run_strategy_model_benchmark
+from factorio_ai.slurm_worker import compact_strategy_payload, parse_json_object_from_content, run_strategy_model_benchmark
+from factorio_ai.strategy import make_strategy_payload, skill_catalog_payload
 
 
 class RemoteSlurmTests(unittest.TestCase):
@@ -163,7 +165,7 @@ class RemoteSlurmTests(unittest.TestCase):
         setup = _attached_env_setup("/home/user/kakao-bot-worker")
         self.assertIn("/home/user/kakao-bot-worker/config.env", setup)
         self.assertIn("FACTORIO_AI_LLM_*|FACTORIO_AI_VLLM_*|FACTORIO_AI_CONDA_ENV", setup)
-        self.assertIn('export "\\$key=\\$value"', setup)
+        self.assertIn('export "$key=$value"', setup)
 
     def test_strategy_model_benchmark_runs_same_payload_per_model(self):
         result = run_strategy_model_benchmark(
@@ -180,6 +182,129 @@ class RemoteSlurmTests(unittest.TestCase):
         self.assertFalse(result["base_url_configured"])
         self.assertEqual([row["model"] for row in result["models"]], ["Qwen/test-3B", "Qwen/test-7B"])
         self.assertTrue(all(row["source"] == "heuristic" for row in result["models"]))
+        self.assertTrue(all(row["llm_error"] for row in result["models"]))
+        self.assertTrue(all(row["llm_prompt_chars"] for row in result["models"]))
+
+    def test_llm_content_parser_extracts_json_object_from_text(self):
+        parsed = parse_json_object_from_content(
+            'Here is the decision:\\n{"selected_skill":"produce_iron_plate","priority":"high"}\\nDone.'
+        )
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed["selected_skill"], "produce_iron_plate")
+        self.assertEqual(parsed["priority"], "high")
+
+    def test_compact_strategy_payload_keeps_prompt_small(self):
+        verbose = {
+            "objective": "launch_rocket_program",
+            "observation": {
+                "inventory": {"iron-plate": 20},
+                "research": {"technologies": {"automation": {"researched": True}}},
+            },
+            "production_targets": {"electronic-circuit": 20.0},
+            "factory_monitor": {
+                "inventory": {"iron-plate": 20},
+                "target_status": {"items": [{"item": f"item-{i}", "deficit_per_minute": i} for i in range(30)]},
+                "bottlenecks": [
+                    {"item": f"bottleneck-{i}", "reason": "x" * 200, "required_by": ["a", "b"], "severity": 100}
+                    for i in range(80)
+                ],
+                "factory_sites": [
+                    {
+                        "site_id": f"site-{i}",
+                        "kind": "plate_smelting_line",
+                        "item": "iron-plate",
+                        "status": "running",
+                        "position": {"x": i, "y": -i},
+                        "machines": ["stone-furnace", "transport-belt"],
+                        "automation_level": "burner-bootstrap",
+                        "notes": ["x" * 200],
+                    }
+                    for i in range(60)
+                ],
+                "logistics_links": [
+                    {
+                        "kind": "belt",
+                        "item": "iron-ore",
+                        "from_site": f"mining-{i}",
+                        "to_site": f"smelting-{i}",
+                        "status": "complete",
+                        "length_tiles": i,
+                        "notes": ["x" * 200],
+                    }
+                    for i in range(80)
+                ],
+            },
+            "goal_dependency_tree": [{"item": f"dep-{i}", "ingredients": []} for i in range(100)],
+            "available_skills": [
+                {"name": f"skill-{i}", "description": "x" * 200, "executor": "Exec", "llm_scope": "scope"}
+                for i in range(40)
+            ],
+        }
+        compact = compact_strategy_payload(verbose)
+        encoded = json.dumps(compact, ensure_ascii=False)
+        self.assertLess(len(encoded), 12000)
+        self.assertLessEqual(len(compact["bottlenecks"]), 10)
+        self.assertLessEqual(len(compact["dependency_targets"]), 40)
+        self.assertLessEqual(len(compact["factory_sites"]), 18)
+        self.assertLessEqual(len(compact["logistics_links"]), 24)
+
+    def test_compact_strategy_payload_only_allows_executable_skills(self):
+        payload = make_strategy_payload("launch_rocket_program", {"inventory": {}, "entities": []}, {})
+        payload["available_skills"] = skill_catalog_payload()
+        compact = compact_strategy_payload(payload)
+        self.assertIn("produce_iron_plate", compact["allowed_skill_names"])
+        self.assertIn("automate_electronic_circuit_line", compact["allowed_skill_names"])
+        self.assertNotIn("launch_rocket_program", compact["allowed_skill_names"])
+
+    def test_compact_strategy_payload_includes_site_level_logistics(self):
+        payload = {
+            "objective": "launch_rocket_program",
+            "observation": {"inventory": {}, "research": {"technologies": {}}},
+            "production_targets": {},
+            "factory_monitor": {
+                "factory_sites": [
+                    {
+                        "site_id": "group:iron-mining",
+                        "kind": "mining_patch",
+                        "item": "iron-ore",
+                        "status": "running",
+                        "position": {"x": 10.234, "y": -3.876},
+                        "machines": ["electric-mining-drill x30"],
+                        "automation_level": "powered",
+                        "notes": ["grouped 30 adjacent site records"],
+                    },
+                    {
+                        "site_id": "group:iron-smelting",
+                        "kind": "plate_smelting_line",
+                        "item": "iron-plate",
+                        "status": "incomplete",
+                        "position": {"x": 40, "y": -3},
+                        "machines": ["stone-furnace x24", "transport-belt x2"],
+                        "automation_level": "belt-fed",
+                        "notes": ["missing ore input lane"],
+                    },
+                ],
+                "logistics_links": [
+                    {
+                        "kind": "belt",
+                        "item": "iron-ore",
+                        "from_site": "group:iron-mining",
+                        "to_site": "group:iron-smelting",
+                        "status": "incomplete",
+                        "length_tiles": 30.456,
+                        "notes": ["site-level logistics link inferred from producer and consumer sites"],
+                    }
+                ],
+            },
+            "available_skills": skill_catalog_payload(),
+        }
+        compact = compact_strategy_payload(payload)
+        self.assertEqual(compact["factory_site_summary"][0]["kind"], "mining_patch")
+        self.assertEqual(compact["factory_sites"][0]["status"], "incomplete")
+        self.assertEqual(compact["factory_sites"][0]["position"], {"x": 40.0, "y": -3.0})
+        self.assertEqual(compact["logistics_links"][0]["from_site"], "group:iron-mining")
+        self.assertEqual(compact["logistics_links"][0]["to_site"], "group:iron-smelting")
+        self.assertEqual(compact["logistics_links"][0]["length_tiles"], 30.5)
 
 
 if __name__ == "__main__":
