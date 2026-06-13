@@ -601,6 +601,25 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["type"], "mine")
         self.assertEqual(decision.action["name"], "coal")
 
+    def test_expand_smelting_recovers_surplus_coal_before_far_fuel_logistics(self):
+        obs = base_observation()
+        obs["inventory"] = {"coal": 0}
+        obs["resources"] = [
+            {"name": "copper-ore", "position": {"x": 4, "y": 0}, "distance": 4},
+            {"name": "coal", "position": {"x": 300, "y": 0}, "distance": 300},
+        ]
+        obs["entities"] = complete_belt_smelting_entities(4, 0, 500, resource="copper-ore", product="copper-plate")
+        for entity in obs["entities"]:
+            if entity["name"] == "burner-inserter":
+                entity["inventories"] = {}
+            if entity["name"] == "stone-furnace":
+                entity["inventories"] = {"1": {"coal": 6}, "2": {"copper-ore": 1}}
+        decision = ExpandCopperSmeltingSkill(target_rate_per_minute=18).next_action(obs)
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["item"], "coal")
+        self.assertEqual(decision.action["name"], "stone-furnace")
+        self.assertIn("surplus coal", decision.reason)
+
     def test_expand_smelting_stops_when_fuel_logistics_are_too_far(self):
         obs = base_observation()
         obs["inventory"] = {"coal": 0}

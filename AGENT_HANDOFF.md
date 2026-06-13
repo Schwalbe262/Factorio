@@ -318,6 +318,8 @@ Key constraints to preserve:
 - Logistic links should be between sites, not individual belts.
 - Sites should be grouped by nearby entities, not listed as hundreds of
   individual machines.
+- Burner smelting expansion can recover surplus coal from nearby fueled
+  machines, but proper coal belt/cache/outpost automation is still a next step.
 - When the LLM has no urgent production/research/defense work, it should use
   idle cycles for site layout improvement.
 - `plan_factory_site` is a simulation/planning skill, not a build skill. It

@@ -241,11 +241,19 @@ The current no-mod observation has recently shown:
 - After this, `no-mod-strategy --objective launch_rocket_program --require-llm`
   selected `expand_iron_smelting`, because iron plate throughput became the
   next reported rocket-program bottleneck.
-- The next live blocker was `expand_copper_smelting` stopping with
-  `expanded copper-plate smelting needs fuel logistics before more walking refuels`.
-  This is a real missing executor problem, not an LLM prompt problem. The next
-  implementation should add a deterministic fuel-logistics skill or upgrade path
-  so burner smelting expansion does not depend on repeated long coal walks.
+- Burner smelting expansion no longer fails immediately when a line needs fuel
+  and the nearest coal patch is far away. The deterministic executor now first
+  recovers surplus coal from nearby fueled machines while preserving reserve
+  coal, then inserts it into the under-fueled drill, burner inserter, or furnace.
+- Live no-mod verification after this change:
+  - `run_expand_iron_smelting_mvp(max_steps=6)` recovered surplus coal from a
+    stone furnace, inserted coal into a burner mining drill, inserted coal into
+    a burner inserter, moved to another surplus source, and recovered more coal;
+  - `run_expand_iron_smelting_mvp(max_steps=3)` inserted coal into the target
+    stone furnace, then made an emergency haul to a coal patch and mined 8 coal.
+- This is still not full coal logistics automation. The next implementation
+  should build a coal belt/feed line, staged coal cache, or electric upgrade
+  path so burner smelting expansion does not depend on repeated long coal walks.
 
 Next practical runtime check:
 

@@ -475,6 +475,9 @@ For this reason, `expand_iron_smelting`, `build_belt_smelting_line`, `setup_powe
 `automate_electronic_circuit_line` are separate skill contracts. The first belt-smelting and steam
 power executors now exist; the remaining higher-throughput smelting and assembling-machine executors
 are still reported as missing instead of substituting a hand-crafting routine.
+Burner-era smelting expansion can also recover surplus coal from nearby fueled machines before it
+falls back to a manual coal haul, which keeps under-fueled lines moving while proper coal logistics
+automation is still being built.
 
 ## Space Age Objective
 

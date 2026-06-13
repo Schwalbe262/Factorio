@@ -1298,29 +1298,16 @@ class BeltSmeltingLineSkill:
         ]:
             entity = layout.get(_entity_key(entity_name))
             if entity and entity_item_count(entity, item) < threshold:
-                position = _position(entity)
-                if inventory_count(observation, item) <= 0:
-                    coal = _nearest_resource_to_position(observation, position, "coal")
-                    if coal is None:
-                        return PlannerDecision(None, "cannot find coal for burner smelting line")
-                    if distance(position, _position(coal)) > WALK_FUEL_LOGISTICS_LIMIT:
-                        return PlannerDecision(None, "burner smelting line needs fuel logistics before more walking refuels")
-                    return self.support_skill._mine_resource(player, coal, "coal", 16)
-                if distance(player, position) > 20:
-                    return PlannerDecision(
-                        {"type": "move_to", "position": position},
-                        f"move near {entity_name} to fuel belt smelting line",
-                    )
-                return PlannerDecision(
-                    {
-                        "type": "insert",
-                        "item": item,
-                        "count": min(count, inventory_count(observation, item)),
-                        "unit_number": entity.get("unit_number"),
-                        "name": entity_name,
-                        "position": position,
-                    },
-                    f"fuel {entity_name} in belt smelting line",
+                return _fuel_burner_line_entity(
+                    observation,
+                    player,
+                    entity,
+                    entity_name=entity_name,
+                    threshold=threshold,
+                    insert_count=count,
+                    context="belt smelting line",
+                    support_skill=self.support_skill,
+                    far_fuel_reason="burner smelting line needs fuel logistics before more walking refuels",
                 )
 
         layout_furnace = layout.get("furnace")
@@ -1493,32 +1480,16 @@ class _ExpandPlateSmeltingSkill:
         ]:
             entity = layout.get(_entity_key(entity_name))
             if entity and entity_item_count(entity, item) < threshold:
-                position = _position(entity)
-                if inventory_count(observation, item) <= 0:
-                    coal = _nearest_resource_to_position(observation, position, "coal")
-                    if coal is None:
-                        return PlannerDecision(None, f"cannot find coal for expanded {self.product_name} smelting")
-                    if distance(position, _position(coal)) > WALK_FUEL_LOGISTICS_LIMIT:
-                        return PlannerDecision(
-                            None,
-                            f"expanded {self.product_name} smelting needs fuel logistics before more walking refuels",
-                        )
-                    return self.line_skill.support_skill._mine_resource(player, coal, "coal", 16)
-                if distance(player, position) > 20:
-                    return PlannerDecision(
-                        {"type": "move_to", "position": position},
-                        f"move near {entity_name} to fuel expanded {self.product_name} smelting",
-                    )
-                return PlannerDecision(
-                    {
-                        "type": "insert",
-                        "item": item,
-                        "count": min(count, inventory_count(observation, item)),
-                        "unit_number": entity.get("unit_number"),
-                        "name": entity_name,
-                        "position": position,
-                    },
-                    f"fuel {entity_name} in expanded {self.product_name} smelting",
+                return _fuel_burner_line_entity(
+                    observation,
+                    player,
+                    entity,
+                    entity_name=entity_name,
+                    threshold=threshold,
+                    insert_count=count,
+                    context=f"expanded {self.product_name} smelting",
+                    support_skill=self.line_skill.support_skill,
+                    far_fuel_reason=f"expanded {self.product_name} smelting needs fuel logistics before more walking refuels",
                 )
 
         return PlannerDecision(
@@ -2126,6 +2097,104 @@ def _belt_line_fueled(layout: dict[str, Any]) -> bool:
         if not isinstance(entity, dict) or entity_item_count(entity, "coal") < minimum:
             return False
     return True
+
+
+def _fuel_burner_line_entity(
+    observation: dict[str, Any],
+    player: dict[str, float],
+    entity: dict[str, Any],
+    *,
+    entity_name: str,
+    threshold: int,
+    insert_count: int,
+    context: str,
+    support_skill: IronPlateSkill,
+    far_fuel_reason: str,
+) -> PlannerDecision:
+    position = _position(entity)
+    inventory_coal = inventory_count(observation, "coal")
+    if inventory_coal <= 0:
+        source = _nearest_surplus_fuel_source(observation, position, exclude_unit=entity.get("unit_number"))
+        if source is not None:
+            source_position = _position(source)
+            if distance(player, source_position) > 20:
+                return PlannerDecision(
+                    {"type": "move_to", "position": source_position},
+                    f"move near surplus coal source for {context}",
+                )
+            take_count = min(16, _surplus_fuel_count(source))
+            return PlannerDecision(
+                {
+                    "type": "take",
+                    "item": "coal",
+                    "count": max(1, take_count),
+                    "unit_number": source.get("unit_number"),
+                    "name": source.get("name"),
+                    "position": source_position,
+                },
+                f"recover surplus coal from {source.get('name')} for {context}",
+            )
+        coal = _nearest_resource_to_position(observation, position, "coal")
+        if coal is None:
+            return PlannerDecision(None, f"cannot find coal for {context}")
+        if distance(position, _position(coal)) > WALK_FUEL_LOGISTICS_LIMIT:
+            return PlannerDecision(None, far_fuel_reason)
+        return support_skill._mine_resource(player, coal, "coal", 16)
+
+    if distance(player, position) > 20:
+        return PlannerDecision(
+            {"type": "move_to", "position": position},
+            f"move near {entity_name} to fuel {context}",
+        )
+    return PlannerDecision(
+        {
+            "type": "insert",
+            "item": "coal",
+            "count": min(insert_count, inventory_coal, max(1, threshold - entity_item_count(entity, "coal"))),
+            "unit_number": entity.get("unit_number"),
+            "name": entity_name,
+            "position": position,
+        },
+        f"fuel {entity_name} in {context}",
+    )
+
+
+def _nearest_surplus_fuel_source(
+    observation: dict[str, Any],
+    target_position: dict[str, float],
+    *,
+    exclude_unit: Any = None,
+) -> dict[str, Any] | None:
+    candidates = []
+    for entity_name in ("stone-furnace", "burner-mining-drill", "burner-inserter", "boiler"):
+        for entity in entities_named(observation, entity_name):
+            if exclude_unit is not None and entity.get("unit_number") == exclude_unit:
+                continue
+            surplus = _surplus_fuel_count(entity)
+            if surplus <= 0:
+                continue
+            entity_position = _position(entity)
+            candidates.append((distance(target_position, entity_position), -surplus, entity))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (item[0], item[1]))
+    return candidates[0][2]
+
+
+def _surplus_fuel_count(entity: dict[str, Any]) -> int:
+    coal = entity_item_count(entity, "coal")
+    reserve = _fuel_reserve_for_entity(str(entity.get("name") or ""))
+    return max(0, coal - reserve)
+
+
+def _fuel_reserve_for_entity(entity_name: str) -> int:
+    if entity_name == "burner-inserter":
+        return 2
+    if entity_name == "boiler":
+        return 5
+    if entity_name in {"burner-mining-drill", "stone-furnace"}:
+        return 3
+    return 0
 
 
 def _blocking_obstacle_near(observation: dict[str, Any], position: dict[str, float]) -> dict[str, Any] | None:
