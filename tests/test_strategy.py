@@ -40,6 +40,28 @@ class StrategyTests(unittest.TestCase):
         )
         self.assertEqual(result["selected_skill"], "automate_electronic_circuit_line")
 
+    def test_power_issue_is_prioritized_before_more_electric_expansion(self):
+        result = heuristic_strategy(
+            "launch_rocket_program",
+            {
+                "inventory": {"iron-plate": 20, "electronic-circuit": 2},
+                "entities": [
+                    {
+                        "name": "assembling-machine-1",
+                        "recipe": "electronic-circuit",
+                        "electric_network_connected": False,
+                    }
+                ],
+                "research": {
+                    "technologies": {
+                        "automation": {"researched": True},
+                    },
+                },
+            },
+        )
+        self.assertEqual(result["selected_skill"], "setup_power")
+        self.assertIn("electric power network", result["blockers"])
+
     def test_rocket_goal_researches_logistics_after_circuit_cell_ready(self):
         result = heuristic_strategy(
             "launch_rocket_program",

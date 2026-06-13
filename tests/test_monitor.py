@@ -5,6 +5,7 @@ from factorio_ai.monitor import (
     estimate_factory_sites,
     estimate_logistics_links,
     estimate_net_rates,
+    estimate_power_networks,
     estimate_production,
     estimate_threats,
     estimate_throughput_constraints,
@@ -93,6 +94,53 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(cable.available_per_minute, 120.0)
         self.assertEqual(cable.required_per_minute, 360.0)
         self.assertIn("ratio is 3:2", " ".join(cable.notes))
+
+    def test_estimates_power_networks_by_connected_network_id(self):
+        networks = estimate_power_networks(
+            {
+                "entities": [
+                    {
+                        "name": "steam-engine",
+                        "electric_network_connected": True,
+                        "electric_network_id": 7,
+                    },
+                    {
+                        "name": "assembling-machine-1",
+                        "electric_network_connected": True,
+                        "electric_network_id": 7,
+                    },
+                    {
+                        "name": "electric-mining-drill",
+                        "electric_network_connected": True,
+                        "electric_network_id": 8,
+                    },
+                    {
+                        "name": "assembling-machine-1",
+                        "electric_network_connected": False,
+                    },
+                ]
+            }
+        )
+        by_id = {item.network_id: item for item in networks}
+        self.assertEqual(by_id["7"].generation_kw, 900.0)
+        self.assertEqual(by_id["7"].demand_kw, 75.0)
+        self.assertEqual(by_id["7"].status, "ok")
+        self.assertEqual(by_id["8"].status, "unknown_generation")
+        self.assertEqual(by_id["unconnected"].unconnected_consumers, 1)
+
+    def test_throughput_constraints_include_power_shortage(self):
+        constraints = estimate_throughput_constraints(
+            {
+                "entities": [
+                    {"name": "solar-panel", "electric_network_connected": True, "electric_network_id": 1},
+                    {"name": "electric-furnace", "electric_network_connected": True, "electric_network_id": 1},
+                ]
+            }
+        )
+        electricity = next(item for item in constraints if item.item == "electricity")
+        self.assertEqual(electricity.available_per_minute, 60.0)
+        self.assertEqual(electricity.required_per_minute, 180.0)
+        self.assertIn("insufficient_generation", electricity.bottleneck)
 
     def test_ignores_unpowered_assembler_output(self):
         estimates = estimate_production(

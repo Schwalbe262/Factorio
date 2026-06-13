@@ -95,6 +95,22 @@ class ThroughputConstraint:
 
 
 @dataclass(frozen=True)
+class PowerNetworkEstimate:
+    network_id: str
+    generation_kw: float
+    demand_kw: float
+    satisfaction: float
+    status: str
+    producers: int
+    consumers: int
+    unconnected_consumers: int
+    notes: list[str]
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class ThreatEstimate:
     danger_level: str
     enemy_count: int
@@ -171,6 +187,26 @@ INSERTER_ITEMS_PER_SECOND = {
     "fast-inserter": 2.31,
     "stack-inserter": 4.62,
 }
+ELECTRIC_GENERATION_KW = {
+    "steam-engine": 900.0,
+    "solar-panel": 60.0,
+}
+ELECTRIC_DEMAND_KW = {
+    "assembling-machine-1": 75.0,
+    "assembling-machine-2": 150.0,
+    "assembling-machine-3": 375.0,
+    "electric-mining-drill": 90.0,
+    "electric-furnace": 180.0,
+    "lab": 60.0,
+    "inserter": 13.0,
+    "fast-inserter": 46.0,
+    "long-handed-inserter": 18.0,
+    "pumpjack": 90.0,
+    "oil-refinery": 420.0,
+    "chemical-plant": 210.0,
+    "radar": 300.0,
+    "beacon": 480.0,
+}
 NORTH = 0
 EAST = 4
 SOUTH = 8
@@ -195,6 +231,7 @@ def summarize_factory(
     factory_events = recent_factory_events(observation)
     damage_events = recent_damage_events(observation)
     threats = estimate_threats(observation)
+    power_networks = estimate_power_networks(observation)
     throughput_constraints = estimate_throughput_constraints(observation)
     return {
         "objective": objective,
@@ -212,6 +249,7 @@ def summarize_factory(
         "factory_events": factory_events,
         "damage_events": damage_events,
         "threats": threats.to_dict(),
+        "power_networks": [item.to_dict() for item in power_networks],
         "throughput_constraints": [item.to_dict() for item in throughput_constraints],
     }
 
@@ -376,7 +414,100 @@ def estimate_throughput_constraints(observation: dict[str, Any]) -> list[Through
                 notes=[f"{inserter_name} rough transfer estimate is {INSERTER_ITEMS_PER_SECOND[inserter_name]} items/s before stack bonuses"],
             )
         )
+    for network in estimate_power_networks(observation):
+        if network.status in {"ok", "unknown_generation"}:
+            continue
+        constraints.append(
+            ThroughputConstraint(
+                item="electricity",
+                required_per_minute=network.demand_kw,
+                available_per_minute=network.generation_kw,
+                bottleneck=f"power network {network.network_id}: {network.status}",
+                notes=network.notes[:3],
+            )
+        )
     return constraints
+
+
+def estimate_power_networks(observation: dict[str, Any]) -> list[PowerNetworkEstimate]:
+    networks: dict[str, dict[str, Any]] = {}
+    unconnected: list[str] = []
+    for entity in _entities(observation):
+        name = str(entity.get("name") or "")
+        generation = ELECTRIC_GENERATION_KW.get(name, 0.0)
+        demand = ELECTRIC_DEMAND_KW.get(name, 0.0)
+        if generation <= 0 and demand <= 0:
+            continue
+        connected = entity.get("electric_network_connected")
+        network_id = _electric_network_key(entity)
+        if demand > 0 and connected is False:
+            unconnected.append(name)
+            continue
+        if generation > 0 and connected is False:
+            continue
+        row = networks.setdefault(
+            network_id,
+            {
+                "generation_kw": 0.0,
+                "demand_kw": 0.0,
+                "producers": 0,
+                "consumers": 0,
+                "notes": [],
+            },
+        )
+        if generation > 0:
+            row["generation_kw"] += generation
+            row["producers"] += 1
+        if demand > 0:
+            row["demand_kw"] += demand
+            row["consumers"] += 1
+    estimates: list[PowerNetworkEstimate] = []
+    for network_id, row in sorted(networks.items()):
+        generation = round(float(row["generation_kw"]), 3)
+        demand = round(float(row["demand_kw"]), 3)
+        satisfaction = 1.0 if demand <= 0 else min(1.0, generation / max(demand, 0.001))
+        status = "ok"
+        notes = [
+            "power is shared only inside one connected electric network",
+            "if demand exceeds generation, electric machines throttle down together on that network",
+        ]
+        if demand > 0 and generation <= 0:
+            status = "unknown_generation"
+            notes.append("no generator was observed in the scan; this does not prove the network has no power source")
+        elif demand > generation:
+            status = "insufficient_generation"
+        estimates.append(
+            PowerNetworkEstimate(
+                network_id=network_id,
+                generation_kw=generation,
+                demand_kw=demand,
+                satisfaction=round(satisfaction, 3),
+                status=status,
+                producers=int(row["producers"]),
+                consumers=int(row["consumers"]),
+                unconnected_consumers=0,
+                notes=notes,
+            )
+        )
+    if unconnected:
+        counts = Counter(unconnected)
+        estimates.append(
+            PowerNetworkEstimate(
+                network_id="unconnected",
+                generation_kw=0.0,
+                demand_kw=round(sum(ELECTRIC_DEMAND_KW.get(name, 0.0) * count for name, count in counts.items()), 3),
+                satisfaction=0.0,
+                status="unconnected_consumers",
+                producers=0,
+                consumers=sum(counts.values()),
+                unconnected_consumers=sum(counts.values()),
+                notes=[
+                    "electric consumers without a pole connection do not share power with the main grid",
+                    "; ".join(f"{name} x{count}" for name, count in sorted(counts.items())),
+                ],
+            )
+        )
+    return estimates
 
 
 def estimate_net_rates(
@@ -1004,6 +1135,13 @@ def _link_id(kind: str, start: dict[str, float], end: dict[str, float], item: st
         f"{round(float(start.get('x') or 0.0), 1)},{round(float(start.get('y') or 0.0), 1)}->"
         f"{round(float(end.get('x') or 0.0), 1)},{round(float(end.get('y') or 0.0), 1)}"
     )
+
+
+def _electric_network_key(entity: dict[str, Any]) -> str:
+    raw = entity.get("electric_network_id")
+    if raw is None or raw == "":
+        return "unknown"
+    return str(raw)
 
 
 def _estimate_furnace(entity: dict[str, Any], speed: float) -> ProductionEstimate | None:

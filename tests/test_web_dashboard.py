@@ -44,6 +44,19 @@ class WebDashboardTests(unittest.TestCase):
                         }
                     ],
                     "bottlenecks": [],
+                    "power_networks": [
+                        {
+                            "network_id": "7",
+                            "generation_kw": 900.0,
+                            "demand_kw": 75.0,
+                            "satisfaction": 1.0,
+                            "status": "ok",
+                            "producers": 1,
+                            "consumers": 1,
+                            "unconnected_consumers": 0,
+                            "notes": ["power is shared only inside one connected electric network"],
+                        }
+                    ],
                     "inventory": {"iron-plate": 3},
                     "technology_chain": [],
                     "dependency_tree": [],
@@ -101,9 +114,32 @@ class WebDashboardTests(unittest.TestCase):
                     },
                 },
                 "strategy": {"selected_skill": "produce_iron_plate", "priority": 95, "skill_status": {"implemented": True}},
+                "token_usage": {
+                    "samples": [
+                        {
+                            "timestamp": "2026-06-13T00:00:00+00:00",
+                            "tokens_used": 1000,
+                            "delta_tokens": 0,
+                            "label": "start",
+                            "source": "codex",
+                        },
+                        {
+                            "timestamp": "2026-06-13T00:01:00+00:00",
+                            "tokens_used": 1250,
+                            "delta_tokens": 250,
+                            "label": "ui work",
+                            "source": "codex",
+                        },
+                    ],
+                    "sample_count": 2,
+                    "latest_tokens": 1250,
+                    "total_delta_tokens": 250,
+                    "updated_at": "2026-06-13T00:01:00+00:00",
+                },
             },
             lang="ko",
         )
+        self.assertIn("팩토리오 공장 모니터링", html)
         self.assertIn('href="/factorio?objective=launch_rocket_program"', html)
         self.assertIn('href="/factorio?lang=ko&amp;objective=launch_rocket_program"', html)
         self.assertIn("/factorio/icon/iron-plate.png", html)
@@ -116,6 +152,14 @@ class WebDashboardTests(unittest.TestCase):
         self.assertIn("Recent Damage", html)
         self.assertIn("stone-furnace", html)
         self.assertIn("no-mod-rcon-lua", html)
+        self.assertLess(html.index("희망 생산량"), html.index("Threats / Defense"))
+        self.assertLess(html.index("추정 생산량"), html.index("Threats / Defense"))
+        self.assertIn("전력망", html)
+        self.assertLess(html.index("Throughput Constraints"), html.index("전력망"))
+        self.assertLess(html.index("전력망"), html.index("Threats / Defense"))
+        self.assertIn("Codex 토큰 사용량", html)
+        self.assertIn("token-chart", html)
+        self.assertIn("1,250", html)
 
     def test_connection_refused_error_is_rendered_as_operator_guidance(self):
         message = friendly_dashboard_error(ConnectionRefusedError(10061, "actively refused"))

@@ -278,10 +278,12 @@ def make_strategy_payload(
         "spatial_planning": make_spatial_planning_context(observation),
         "build_item_supply": make_build_item_supply_context(observation, monitor),
         "threats": make_threat_context(observation),
+        "power_networks": monitor.get("power_networks", []),
         "goal_dependency_tree": dependency_tree_for_objective(objective, max_depth=5),
         "available_skills": skill_catalog_payload(),
         "decision_rule": (
             "Select exactly one high-level skill. Diagnose bottlenecks first. "
+            "Evaluate electric supply per connected power network, not as a single global pool. "
             "For spatial work, choose districts, corridors, or rail topology only. "
             "Do not emit tile-level movement, mining, building, rail, or signal actions."
         ),
@@ -438,6 +440,7 @@ def heuristic_strategy(
     automation_researched = _technology_researched(observation, "automation")
     monitor = summarize_factory(observation, objective, production_targets=production_targets)
     bottlenecks = monitor.get("bottlenecks") if isinstance(monitor.get("bottlenecks"), list) else []
+    power_issue = _first_power_issue(monitor)
     threats = make_threat_context(observation)
     if threats["danger_level"] in {"critical", "high"} and int(threats.get("armed_gun_turret_count") or 0) <= 0:
         nearest = threats.get("nearest_enemy") if isinstance(threats.get("nearest_enemy"), dict) else {}
@@ -453,6 +456,21 @@ def heuristic_strategy(
             ],
             blockers=["enemy threat"],
             expected_effect="Pause expansion and build or plan starter defenses before continuing production growth.",
+        ).to_dict()
+
+    if power_issue:
+        return StrategicDecision(
+            selected_skill="setup_power",
+            priority=94,
+            reason=f"Electric power issue on network {power_issue.get('network_id')}: {power_issue.get('status')}.",
+            evidence=[
+                f"generation_kw={power_issue.get('generation_kw')}",
+                f"demand_kw={power_issue.get('demand_kw')}",
+                f"satisfaction={power_issue.get('satisfaction')}",
+                f"unconnected_consumers={power_issue.get('unconnected_consumers')}",
+            ],
+            blockers=["electric power network"],
+            expected_effect="Expand or connect the electric network before adding more electric machines.",
         ).to_dict()
 
     if bottlenecks:
@@ -584,6 +602,16 @@ def _string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return [str(value)] if value else []
     return [str(item) for item in value]
+
+
+def _first_power_issue(monitor: dict[str, Any]) -> dict[str, Any] | None:
+    networks = monitor.get("power_networks") if isinstance(monitor.get("power_networks"), list) else []
+    for row in networks:
+        if not isinstance(row, dict):
+            continue
+        if row.get("status") in {"insufficient_generation", "no_generation", "unconnected_consumers"}:
+            return row
+    return None
 
 
 def _skill_for_bottleneck_item(item: str, observation: dict[str, Any]) -> str | None:

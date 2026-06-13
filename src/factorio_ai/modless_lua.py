@@ -203,6 +203,12 @@ local function entity_connected_to_electric_network(entity)
   if ok then return connected end
   return nil
 end
+local function entity_electric_network_id(entity)
+  if not entity or not entity.valid then return nil end
+  local ok, network_id = pcall(function() return entity.electric_network_id end)
+  if ok then return network_id end
+  return nil
+end
 local function optional_entity_position(entity, property)
   if not entity or not entity.valid then return nil end
   local ok, value = pcall(function() return entity[property] end)
@@ -245,6 +251,7 @@ local function entity_snapshot(entity, origin)
     status = entity.status,
     recipe = entity_recipe_name(entity),
     electric_network_connected = entity_connected_to_electric_network(entity),
+    electric_network_id = entity_electric_network_id(entity),
     drop_position = optional_entity_position(entity, "drop_position"),
     pickup_position = optional_entity_position(entity, "pickup_position"),
     distance = round(distance(origin, entity.position)),

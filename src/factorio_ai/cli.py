@@ -30,6 +30,7 @@ from .vanilla_gui import (
 )
 from .vanilla_perception import classify_bmp_file
 from .web_dashboard import FACTORIO_ROUTE, public_dashboard_urls, serve_dashboard
+from .token_usage import record_token_usage, token_usage_summary
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -197,6 +198,14 @@ def main(argv: list[str] | None = None) -> None:
     web_parser.add_argument("--host", default="0.0.0.0")
     web_parser.add_argument("--port", type=int, default=18889)
     web_parser.add_argument("--objective", default="launch_rocket_program")
+
+    token_parser = subparsers.add_parser("record-token-usage", help="Append a Codex token usage sample")
+    token_parser.add_argument("--tokens-used", type=int, required=True)
+    token_parser.add_argument("--label", default="")
+    token_parser.add_argument("--source", default="codex")
+    token_parser.add_argument("--timestamp")
+
+    subparsers.add_parser("token-usage-summary", help="Print the recorded Codex token usage summary")
 
     action_parser = subparsers.add_parser("action", help="Execute /ai_action JSON")
     action_parser.add_argument("json_action")
@@ -636,6 +645,21 @@ def main(argv: list[str] | None = None) -> None:
             }
         )
         serve_dashboard(cfg, host=args.host, port=args.port, objective=args.objective)
+        return
+
+    if args.command == "record-token-usage":
+        sample = record_token_usage(
+            cfg.log_dir,
+            args.tokens_used,
+            label=args.label,
+            source=args.source,
+            timestamp=args.timestamp,
+        )
+        print_json({"ok": True, "sample": sample.to_dict()})
+        return
+
+    if args.command == "token-usage-summary":
+        print_json({"ok": True, "token_usage": token_usage_summary(cfg.log_dir)})
         return
 
     if args.command == "action":

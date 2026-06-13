@@ -17,6 +17,7 @@ from .modless_lua import ModlessLuaController
 from .skill_registry import annotate_strategy_with_skill_status
 from .strategy import heuristic_strategy
 from .targets import TARGET_ITEMS, load_targets, parse_target_form, save_targets
+from .token_usage import token_usage_summary
 
 
 FACTORIO_ROUTE = "/factorio"
@@ -99,9 +100,22 @@ TEXT: dict[str, dict[str, str]] = {
         "cause": "Cause",
         "damage": "Damage",
         "health": "Health",
+        "token_usage": "Codex Token Usage",
+        "no_token_usage": "No Codex token usage samples recorded yet.",
+        "latest_tokens": "Latest Tokens",
+        "total_delta_tokens": "Turn Delta",
+        "sample_count": "Samples",
+        "last_sample": "Last Sample",
+        "power_networks": "Power Networks",
+        "no_power_networks": "No electric power networks inferred yet.",
+        "network": "Network",
+        "generation_kw": "Generation kW",
+        "demand_kw": "Demand kW",
+        "satisfaction": "Supply",
+        "unconnected": "Unconnected",
     },
     "ko": {
-        "title": "팩토리오 AI 공장 모니터",
+        "title": "팩토리오 공장 모니터링",
         "connection": "연결",
         "objective": "목표",
         "tick": "틱",
@@ -139,6 +153,19 @@ TEXT: dict[str, dict[str, str]] = {
         "executor_missing": "실행 로직이 없습니다. AI가 안전하게 실행하기 전에 Codex가 이 스킬을 구현해야 합니다.",
         "executor": "실행기",
         "language": "언어",
+        "token_usage": "Codex 토큰 사용량",
+        "no_token_usage": "아직 기록된 Codex 토큰 사용량 샘플이 없습니다.",
+        "latest_tokens": "최근 토큰",
+        "total_delta_tokens": "증가량",
+        "sample_count": "샘플",
+        "last_sample": "최근 기록",
+        "power_networks": "전력망",
+        "no_power_networks": "아직 추정된 전력망이 없습니다.",
+        "network": "전력망",
+        "generation_kw": "발전 kW",
+        "demand_kw": "수요 kW",
+        "satisfaction": "공급률",
+        "unconnected": "미연결",
     },
 }
 
@@ -320,6 +347,7 @@ def public_dashboard_urls(host: str, port: int, lang: str = DEFAULT_LANG) -> lis
 def build_dashboard_state(cfg: AppConfig, objective: str) -> dict[str, Any]:
     timestamp = datetime.now(timezone.utc).isoformat()
     targets = load_targets(cfg.runtime_dir, objective)
+    token_usage = token_usage_summary(cfg.log_dir)
     try:
         observation, adapter = observe_dashboard_state(cfg)
         monitor = summarize_factory(observation, objective, production_targets=targets.per_minute)
@@ -337,6 +365,7 @@ def build_dashboard_state(cfg: AppConfig, objective: str) -> dict[str, Any]:
             "adapter": adapter,
             "monitor": monitor,
             "strategy": strategy,
+            "token_usage": token_usage,
         }
     except Exception as exc:  # noqa: BLE001
         return {
@@ -345,6 +374,7 @@ def build_dashboard_state(cfg: AppConfig, objective: str) -> dict[str, Any]:
             "objective": objective,
             "targets": targets.to_dict(),
             "error": friendly_dashboard_error(exc),
+            "token_usage": token_usage,
         }
 
 
@@ -385,6 +415,7 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
               <h2>{_t(lang, "connection")}</h2>
               <p class="error">{escape(str(state.get("error") or "unknown error"))}</p>
             </section>
+            {_token_usage_panel(state.get("token_usage"), lang)}
             """,
             lang,
             state.get("objective"),
@@ -396,6 +427,7 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
     throughput_constraints = (
         monitor.get("throughput_constraints") if isinstance(monitor.get("throughput_constraints"), list) else []
     )
+    power_networks = monitor.get("power_networks") if isinstance(monitor.get("power_networks"), list) else []
     factory_sites = monitor.get("factory_sites") if isinstance(monitor.get("factory_sites"), list) else []
     logistics_links = monitor.get("logistics_links") if isinstance(monitor.get("logistics_links"), list) else []
     factory_events = monitor.get("factory_events") if isinstance(monitor.get("factory_events"), list) else []
@@ -408,6 +440,7 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
     target_status = monitor.get("target_status") if isinstance(monitor.get("target_status"), dict) else {}
     targets = state.get("targets") if isinstance(state.get("targets"), dict) else {}
     targets_per_minute = targets.get("per_minute") if isinstance(targets.get("per_minute"), dict) else {}
+    token_usage = state.get("token_usage") if isinstance(state.get("token_usage"), dict) else {}
 
     body = f"""
     <section class="summary">
@@ -441,17 +474,6 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
       <p class="muted">{_target_satisfied_text(target_status, lang)}</p>
     </section>
 
-    <section class="grid">
-      <div class="panel">
-        <h2>{_t(lang, "threats")}</h2>
-        {_threat_summary(threats, lang)}
-      </div>
-      <div class="panel">
-        <h2>{_t(lang, "recent_damage")}</h2>
-        {_damage_event_table(damage_events, lang)}
-      </div>
-    </section>
-
     <section class="panel">
       <h2>{_t(lang, "desired_targets")}</h2>
       {_target_form(targets_per_minute, target_status, lang, state.get("objective"))}
@@ -473,6 +495,22 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
       {_throughput_constraint_table(throughput_constraints, lang)}
     </section>
 
+    <section class="panel">
+      <h2>{_t(lang, "power_networks")}</h2>
+      {_power_network_table(power_networks, lang)}
+    </section>
+
+    <section class="grid">
+      <div class="panel">
+        <h2>{_t(lang, "threats")}</h2>
+        {_threat_summary(threats, lang)}
+      </div>
+      <div class="panel">
+        <h2>{_t(lang, "recent_damage")}</h2>
+        {_damage_event_table(damage_events, lang)}
+      </div>
+    </section>
+
     <section class="grid">
       <div class="panel">
         <h2>{_t(lang, "factory_sites")}</h2>
@@ -488,6 +526,8 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
       <h2>{_t(lang, "factory_events")}</h2>
       {_factory_event_table(factory_events, lang)}
     </section>
+
+    {_token_usage_panel(token_usage, lang)}
 
     <section class="grid">
       <div class="panel">
@@ -662,6 +702,45 @@ def _page(title: str, body: str, lang: str, objective: Any = None) -> str:
       display: flex;
       justify-content: flex-end;
     }}
+    .metrics {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 12px;
+      margin-bottom: 12px;
+    }}
+    .metric {{
+      border: 1px solid #2a3036;
+      border-radius: 4px;
+      background: #101419;
+      padding: 10px;
+    }}
+    .metric strong {{
+      display: block;
+      font-size: 18px;
+    }}
+    .token-chart {{
+      display: block;
+      width: 100%;
+      height: 220px;
+      margin: 8px 0 12px;
+      border: 1px solid #2a3036;
+      border-radius: 4px;
+      background: #0c0e10;
+    }}
+    .token-chart .gridline {{
+      stroke: #222a31;
+      stroke-width: 1;
+    }}
+    .token-chart .usage-line {{
+      fill: none;
+      stroke: #75b843;
+      stroke-width: 3;
+    }}
+    .token-chart .usage-point {{
+      fill: #f0c46c;
+      stroke: #101214;
+      stroke-width: 1;
+    }}
     @media (max-width: 640px) {{
       main {{
         padding: 14px;
@@ -758,6 +837,30 @@ def _throughput_constraint_table(rows: list[Any], lang: str) -> str:
         f"<th>{_t(lang, 'available')}</th><th>{_t(lang, 'bottlenecks')}</th>"
         f"<th>{_t(lang, 'reason')}</th></tr></thead>"
         f"<tbody>{body}</tbody></table>"
+    )
+
+
+def _power_network_table(rows: list[Any], lang: str) -> str:
+    if not rows:
+        return f"<p class=\"muted\">{_t(lang, 'no_power_networks')}</p>"
+    body = "".join(
+        "<tr>"
+        f"<td>{escape(str(row.get('network_id') or ''))}</td>"
+        f"<td>{escape(str(row.get('status') or ''))}</td>"
+        f"<td>{escape(str(row.get('generation_kw') or 0))}</td>"
+        f"<td>{escape(str(row.get('demand_kw') or 0))}</td>"
+        f"<td>{escape(str(row.get('satisfaction') or 0))}</td>"
+        f"<td>{escape(str(row.get('unconnected_consumers') or 0))}</td>"
+        f"<td>{escape('; '.join(str(item) for item in row.get('notes', [])[:2]))}</td>"
+        "</tr>"
+        for row in rows[:40]
+        if isinstance(row, dict)
+    )
+    return (
+        f"<table><thead><tr><th>{_t(lang, 'network')}</th><th>{_t(lang, 'status')}</th>"
+        f"<th>{_t(lang, 'generation_kw')}</th><th>{_t(lang, 'demand_kw')}</th>"
+        f"<th>{_t(lang, 'satisfaction')}</th><th>{_t(lang, 'unconnected')}</th>"
+        f"<th>{_t(lang, 'reason')}</th></tr></thead><tbody>{body}</tbody></table>"
     )
 
 
@@ -887,6 +990,102 @@ def _damage_event_table(rows: list[Any], lang: str) -> str:
     )
 
 
+def _token_usage_panel(value: Any, lang: str) -> str:
+    usage = value if isinstance(value, dict) else {}
+    samples = usage.get("samples") if isinstance(usage.get("samples"), list) else []
+    if not samples:
+        return (
+            "<section class=\"panel\">"
+            f"<h2>{_t(lang, 'token_usage')}</h2>"
+            f"<p class=\"muted\">{_t(lang, 'no_token_usage')}</p>"
+            "</section>"
+        )
+    return (
+        "<section class=\"panel\">"
+        f"<h2>{_t(lang, 'token_usage')}</h2>"
+        "<div class=\"metrics\">"
+        f"{_metric(_t(lang, 'latest_tokens'), _format_int(usage.get('latest_tokens')))}"
+        f"{_metric(_t(lang, 'total_delta_tokens'), _format_int(usage.get('total_delta_tokens')))}"
+        f"{_metric(_t(lang, 'sample_count'), _format_int(usage.get('sample_count')))}"
+        f"{_metric(_t(lang, 'last_sample'), str(usage.get('updated_at') or ''))}"
+        "</div>"
+        f"{_token_usage_svg(samples)}"
+        f"{_token_usage_table(samples[-8:], lang)}"
+        "</section>"
+    )
+
+
+def _metric(label: str, value: str) -> str:
+    return (
+        "<div class=\"metric\">"
+        f"<span class=\"label\">{escape(label)}</span>"
+        f"<strong>{escape(value)}</strong>"
+        "</div>"
+    )
+
+
+def _token_usage_svg(samples: list[Any]) -> str:
+    numeric = [
+        int(sample.get("tokens_used") or 0)
+        for sample in samples
+        if isinstance(sample, dict)
+    ]
+    if not numeric:
+        return ""
+    width = 760
+    height = 220
+    left = 42
+    right = 16
+    top = 16
+    bottom = 32
+    plot_width = width - left - right
+    plot_height = height - top - bottom
+    min_value = min(numeric)
+    max_value = max(numeric)
+    span = max(max_value - min_value, 1)
+    count = max(len(numeric) - 1, 1)
+    points = []
+    circles = []
+    for index, value in enumerate(numeric):
+        x = left + (plot_width * index / count)
+        y = top + plot_height - (plot_height * (value - min_value) / span)
+        points.append(f"{x:.1f},{y:.1f}")
+        circles.append(f"<circle class=\"usage-point\" cx=\"{x:.1f}\" cy=\"{y:.1f}\" r=\"3\" />")
+    gridlines = "".join(
+        f"<line class=\"gridline\" x1=\"{left}\" y1=\"{top + plot_height * step / 4:.1f}\" "
+        f"x2=\"{width - right}\" y2=\"{top + plot_height * step / 4:.1f}\" />"
+        for step in range(5)
+    )
+    return (
+        f"<svg class=\"token-chart\" viewBox=\"0 0 {width} {height}\" role=\"img\" "
+        "aria-label=\"Codex token usage line chart\">"
+        f"{gridlines}"
+        f"<text x=\"{left}\" y=\"{height - 10}\" fill=\"#9aa4af\" font-size=\"11\">{escape(_format_int(min_value))}</text>"
+        f"<text x=\"{left}\" y=\"14\" fill=\"#9aa4af\" font-size=\"11\">{escape(_format_int(max_value))}</text>"
+        f"<polyline class=\"usage-line\" points=\"{' '.join(points)}\" />"
+        f"{''.join(circles)}"
+        "</svg>"
+    )
+
+
+def _token_usage_table(samples: list[Any], lang: str) -> str:
+    body = "".join(
+        "<tr>"
+        f"<td>{escape(str(row.get('timestamp') or ''))}</td>"
+        f"<td>{escape(str(row.get('label') or ''))}</td>"
+        f"<td>{escape(_format_int(row.get('delta_tokens')))}</td>"
+        f"<td>{escape(_format_int(row.get('tokens_used')))}</td>"
+        "</tr>"
+        for row in samples
+        if isinstance(row, dict)
+    )
+    return (
+        f"<table><thead><tr><th>{_t(lang, 'updated')}</th><th>{_t(lang, 'reason')}</th>"
+        f"<th>{_t(lang, 'total_delta_tokens')}</th><th>{_t(lang, 'latest_tokens')}</th></tr></thead>"
+        f"<tbody>{body}</tbody></table>"
+    )
+
+
 def _target_form(targets: dict[str, Any], target_status: dict[str, Any], lang: str, objective: Any) -> str:
     status_rows = (
         {
@@ -995,6 +1194,13 @@ def _position_text(value: Any) -> str:
         return f"{float(value.get('x') or 0.0):.1f}, {float(value.get('y') or 0.0):.1f}"
     except (TypeError, ValueError):
         return ""
+
+
+def _format_int(value: Any) -> str:
+    try:
+        return f"{int(value or 0):,}"
+    except (TypeError, ValueError):
+        return "0"
 
 
 def _t(lang: str, key: str) -> str:
