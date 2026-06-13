@@ -1199,7 +1199,7 @@ class PlannerTests(unittest.TestCase):
     def test_circuit_automation_inserts_copper_into_cable_assembler(self):
         obs = powered_automation_observation()
         obs["inventory"] = {"copper-plate": 8, "iron-plate": 8}
-        obs["entities"].extend(circuit_cell_entities())
+        obs["entities"].extend(circuit_cell_entities(circuit_inventory={"iron-plate": 4, "copper-cable": 6}))
         decision = CircuitAutomationSkill().next_action(obs)
         self.assertEqual(decision.action["type"], "insert")
         self.assertEqual(decision.action["item"], "copper-plate")
@@ -1220,6 +1220,27 @@ class PlannerTests(unittest.TestCase):
         decision = CircuitAutomationSkill().next_action(obs)
         self.assertEqual(decision.action["type"], "insert")
         self.assertEqual(decision.action["item"], "iron-plate")
+
+    def test_circuit_automation_prioritizes_circuit_iron_before_more_copper(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"copper-plate": 8, "iron-plate": 5}
+        obs["entities"].extend(circuit_cell_entities(cable_inventory={"copper-cable": 40}))
+        decision = CircuitAutomationSkill().next_action(obs)
+        self.assertEqual(decision.action["type"], "insert")
+        self.assertEqual(decision.action["item"], "iron-plate")
+
+    def test_circuit_automation_takes_cable_output_for_circuit_assembler(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"iron-plate": 8}
+        obs["entities"].extend(
+            circuit_cell_entities(
+                cable_inventory={"copper-cable": 40},
+                circuit_inventory={"iron-plate": 4},
+            )
+        )
+        decision = CircuitAutomationSkill().next_action(obs)
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["item"], "copper-cable")
 
     def test_circuit_automation_takes_output_from_circuit_assembler(self):
         obs = powered_automation_observation()

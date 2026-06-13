@@ -39,7 +39,7 @@ from .planner import (
 )
 from .rcon import FactorioRconClient
 from .skill_registry import annotate_strategy_with_skill_status
-from .strategy import heuristic_strategy, make_strategy_payload, skill_catalog_payload
+from .strategy import heuristic_strategy, make_strategy_payload, reconcile_strategy_decision, skill_catalog_payload
 from .targets import load_targets
 
 
@@ -450,6 +450,19 @@ class FactorioController:
                     latency_ms=0,
                 )
 
+        before_guardrail = dict(result)
+        result = reconcile_strategy_decision(result, objective, observation, production_targets)
+        if result.get("guardrail_adjusted") and result != before_guardrail:
+            record_llm_decision(
+                self.cfg.log_dir,
+                objective=objective,
+                provider="strategy_guardrail",
+                result=result,
+                request_summary=request_summary,
+                error="LLM strategy adjusted by deterministic feasibility guardrail",
+                latency_ms=0,
+            )
+
         if require_llm and result.get("source") != "llm":
             raise RuntimeError(f"LLM strategy was required but source was {result.get('source')}")
         return annotate_strategy_with_skill_status(result, runtime_dir=self.cfg.runtime_dir)
@@ -465,6 +478,11 @@ class FactorioController:
         selected = str(strategy.get("selected_skill") or strategy.get("selected_goal") or "")
         status = strategy.get("skill_status") if isinstance(strategy.get("skill_status"), dict) else {}
         if status.get("codex_required"):
+            self._maybe_progress_background_layout_for_blocked_strategy(
+                objective,
+                selected,
+                "executor missing; waiting for Codex implementation",
+            )
             return StrategyStepSummary(
                 ok=False,
                 reason=f"executor missing for selected skill: {selected}",
@@ -475,6 +493,11 @@ class FactorioController:
 
         config = self._skill_run_config(selected, target_count=target_count, max_steps=max_steps)
         if config is None:
+            self._maybe_progress_background_layout_for_blocked_strategy(
+                objective,
+                selected,
+                "selected skill has no local runner; waiting for Codex implementation",
+            )
             return StrategyStepSummary(
                 ok=False,
                 reason=f"selected skill is not executable by the local runner: {selected}",
@@ -778,6 +801,47 @@ class FactorioController:
             target_item,
         )
 
+    def _maybe_progress_background_layout_for_blocked_strategy(
+        self,
+        objective: str,
+        selected_skill: str,
+        reason: str,
+    ) -> None:
+        if os.getenv("FACTORIO_AI_BACKGROUND_LAYOUT_ON_BLOCKED_STRATEGY", "1").lower() in {
+            "0",
+            "false",
+            "no",
+            "off",
+        }:
+            return
+        try:
+            observation = self.observe()
+        except Exception as exc:  # noqa: BLE001
+            self._write_background_layout_log(
+                {
+                    "event": "layout_blocked_strategy_observe_failed",
+                    "active_skill": f"codex_wait:{selected_skill}",
+                    "active_step": 0,
+                    "block_reason": reason,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
+            return
+        self._write_background_layout_log(
+            {
+                "event": "layout_blocked_strategy_detected",
+                "active_skill": f"codex_wait:{selected_skill}",
+                "active_step": 0,
+                "block_reason": reason,
+            }
+        )
+        self._maybe_progress_background_layout_work(
+            observation,
+            objective,
+            f"codex_wait:{selected_skill}",
+            0,
+        )
+
     def _maybe_progress_background_layout_work(
         self,
         observation: dict[str, Any],
@@ -931,6 +995,7 @@ class FactorioController:
             }
 
     def _write_background_layout_log(self, payload: dict[str, Any]) -> None:
+        self.cfg.log_dir.mkdir(parents=True, exist_ok=True)
         path = self.cfg.log_dir / "layout-improvement-background.jsonl"
         row = {"time": datetime.now(timezone.utc).isoformat(), **payload}
         with path.open("a", encoding="utf-8") as file:

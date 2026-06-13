@@ -1,6 +1,12 @@
 import unittest
 
-from factorio_ai.strategy import heuristic_strategy, make_strategy_payload, normalize_strategy_response, skill_catalog_payload
+from factorio_ai.strategy import (
+    heuristic_strategy,
+    make_strategy_payload,
+    normalize_strategy_response,
+    reconcile_strategy_decision,
+    skill_catalog_payload,
+)
 
 
 class StrategyTests(unittest.TestCase):
@@ -104,6 +110,30 @@ class StrategyTests(unittest.TestCase):
             production_targets={"electronic-circuit": 20.0},
         )
         self.assertEqual(result["selected_skill"], "automate_electronic_circuit_line")
+
+    def test_reconcile_promotes_hand_circuit_choice_for_rate_deficit(self):
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "produce_electronic_circuit",
+                "priority": 50,
+                "reason": "Need more circuits.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            {
+                "inventory": {"iron-plate": 20, "copper-plate": 20},
+                "entities": [],
+                "research": {"technologies": {"automation": {"researched": True}}},
+            },
+            production_targets={"electronic-circuit": 20.0},
+        )
+        self.assertEqual(result["selected_skill"], "automate_electronic_circuit_line")
+        self.assertEqual(result["source"], "llm")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "produce_electronic_circuit")
+        self.assertIn("assembler-based electronic circuit production", result["blockers"])
 
     def test_copper_target_bottleneck_expands_copper_smelting(self):
         result = heuristic_strategy(

@@ -134,6 +134,66 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(submitted["payload"]["active_skill"], "bootstrap_build_item_mall")
         self.assertIn("layout_task_submitted", log_text)
 
+    def test_blocked_strategy_submits_background_layout_work(self):
+        observation = {
+            "tick": 1,
+            "inventory": {},
+            "entities": [
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 10,
+                    "recipe": "electronic-circuit",
+                    "position": {"x": 0, "y": 0},
+                    "electric_network_connected": True,
+                    "inventories": {},
+                }
+            ],
+            "resources": [],
+            "research": {"technologies": {}},
+        }
+
+        class FakeController(FactorioController):
+            def observe(self):
+                return observation
+
+            def strategy_decision(self, objective, require_llm=False):
+                return {
+                    "selected_skill": "future_build_item_skill",
+                    "reason": "needs missing build item executor",
+                    "skill_status": {
+                        "name": "future_build_item_skill",
+                        "implemented": False,
+                        "executor": None,
+                        "codex_required": True,
+                    },
+                }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cfg = replace(test_config(Path(temp_dir)), slurm_enabled=True)
+            controller = FakeController(cfg)
+            with (
+                patch.dict(
+                    "os.environ",
+                    {
+                        "FACTORIO_AI_BACKGROUND_LAYOUT_INTERVAL_SECONDS": "0",
+                        "FACTORIO_AI_BACKGROUND_LAYOUT_MODE": "queue",
+                    },
+                ),
+                patch("factorio_ai.remote_slurm.submit_task", return_value="layout-blocked.json") as submit_task,
+            ):
+                summary = controller.run_strategy_step("launch_rocket_program")
+
+            log_path = cfg.log_dir / "layout-improvement-background.jsonl"
+            rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+
+        self.assertFalse(summary.ok)
+        submit_task.assert_called_once()
+        submitted = submit_task.call_args.args[0]
+        self.assertEqual(submitted["type"], "layout_improvement_request")
+        self.assertEqual(submitted["payload"]["active_skill"], "codex_wait:future_build_item_skill")
+        self.assertEqual(rows[0]["event"], "layout_blocked_strategy_detected")
+        self.assertEqual(rows[-1]["event"], "layout_task_submitted")
+
     def test_strategy_runner_maps_implemented_material_skills(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             controller = FactorioController(test_config(Path(temp_dir)))

@@ -2,8 +2,9 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from factorio_ai.slurm_worker import run_task_file, run_worker
+from factorio_ai.slurm_worker import compact_layout_improvement_payload, run_strategy_request, run_task_file, run_worker
 
 
 class SlurmWorkerTests(unittest.TestCase):
@@ -67,6 +68,38 @@ class SlurmWorkerTests(unittest.TestCase):
             self.assertEqual(result["selected_skill"], "expand_iron_smelting")
             self.assertEqual(result["source"], "heuristic")
 
+    def test_strategy_request_guardrail_promotes_hand_circuit_llm_choice(self):
+        with patch(
+            "factorio_ai.slurm_worker.call_llm_json_with_diagnostics",
+            return_value=(
+                {
+                    "selected_skill": "produce_electronic_circuit",
+                    "priority": 50,
+                    "reason": "Need more electronic circuits.",
+                    "evidence": [],
+                    "blockers": [],
+                    "expected_effect": "",
+                },
+                {},
+            ),
+        ):
+            result = run_strategy_request(
+                {
+                    "objective": "launch_rocket_program",
+                    "observation": {
+                        "inventory": {"iron-plate": 20, "copper-plate": 20},
+                        "entities": [],
+                        "research": {"technologies": {"automation": {"researched": True}}},
+                    },
+                    "production_targets": {"electronic-circuit": 20.0},
+                    "available_skills": [],
+                }
+            )
+
+        self.assertEqual(result["source"], "llm")
+        self.assertEqual(result["selected_skill"], "automate_electronic_circuit_line")
+        self.assertEqual(result["guardrail_adjusted"]["to"], "automate_electronic_circuit_line")
+
     def test_run_task_file_handles_layout_improvement_request(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -103,6 +136,21 @@ class SlurmWorkerTests(unittest.TestCase):
             self.assertEqual(result["selected_candidate_id"], "green-circuit-3-cable-2-circuit-cell")
             self.assertTrue(result["no_apply"])
             self.assertFalse(result["build_ready"])
+
+    def test_layout_payload_marks_codex_wait_context(self):
+        compact = compact_layout_improvement_payload(
+            {
+                "objective": "launch_rocket_program",
+                "active_skill": "codex_wait:future_build_item_skill",
+                "active_step": 0,
+                "observation": {"inventory": {}, "entities": [], "resources": []},
+                "production_targets": {},
+            }
+        )
+
+        self.assertEqual(compact["active_skill"], "codex_wait:future_build_item_skill")
+        self.assertIn("Codex reports that the executor work is complete", compact["instruction"])
+        self.assertIn("simulation only", compact["instruction"])
 
 
 if __name__ == "__main__":

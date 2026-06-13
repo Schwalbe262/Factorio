@@ -2956,6 +2956,47 @@ class CircuitAutomationSkill:
                 "seed circuit assembler with available copper cable",
             )
 
+        if circuit_assembler and entity_item_count(circuit_assembler, "iron-plate") < 4:
+            if inventory_count(observation, "iron-plate") > 0:
+                circuit_pos = _position(circuit_assembler)
+                if distance(player, circuit_pos) > 20:
+                    return PlannerDecision({"type": "move_to", "position": circuit_pos}, "move near circuit assembler to insert iron")
+                return PlannerDecision(
+                    {
+                        "type": "insert",
+                        "item": "iron-plate",
+                        "count": min(20, inventory_count(observation, "iron-plate")),
+                        "unit_number": circuit_assembler.get("unit_number"),
+                        "name": "assembling-machine-1",
+                        "position": circuit_pos,
+                    },
+                    "insert iron plates into circuit assembler",
+                )
+            decision = self.iron_skill.next_action(observation, target_count=8, inventory_only=True)
+            if not decision.done:
+                return decision
+
+        if (
+            circuit_assembler
+            and cable_assembler
+            and entity_item_count(circuit_assembler, "copper-cable") < 6
+            and entity_item_count(cable_assembler, "copper-cable") > 0
+        ):
+            cable_pos = _position(cable_assembler)
+            if distance(player, cable_pos) > 20:
+                return PlannerDecision({"type": "move_to", "position": cable_pos}, "move near cable assembler to collect copper cable")
+            return PlannerDecision(
+                {
+                    "type": "take",
+                    "item": "copper-cable",
+                    "count": min(24, entity_item_count(cable_assembler, "copper-cable")),
+                    "unit_number": cable_assembler.get("unit_number"),
+                    "name": "assembling-machine-1",
+                    "position": cable_pos,
+                },
+                "take copper cable from cable assembler output",
+            )
+
         if cable_assembler and entity_item_count(cable_assembler, "copper-plate") < 4:
             if inventory_count(observation, "copper-plate") < 8:
                 decision = self.copper_skill.next_action(observation, target_count=8, inventory_only=True)
@@ -2974,26 +3015,6 @@ class CircuitAutomationSkill:
                     "position": cable_pos,
                 },
                 "insert copper plates into cable assembler",
-            )
-
-        if circuit_assembler and entity_item_count(circuit_assembler, "iron-plate") < 4:
-            if inventory_count(observation, "iron-plate") < 8:
-                decision = self.iron_skill.next_action(observation, target_count=8, inventory_only=True)
-                if not decision.done:
-                    return decision
-            circuit_pos = _position(circuit_assembler)
-            if distance(player, circuit_pos) > 20:
-                return PlannerDecision({"type": "move_to", "position": circuit_pos}, "move near circuit assembler to insert iron")
-            return PlannerDecision(
-                {
-                    "type": "insert",
-                    "item": "iron-plate",
-                    "count": min(20, inventory_count(observation, "iron-plate")),
-                    "unit_number": circuit_assembler.get("unit_number"),
-                    "name": "assembling-machine-1",
-                    "position": circuit_pos,
-                },
-                "insert iron plates into circuit assembler",
             )
 
         return PlannerDecision(

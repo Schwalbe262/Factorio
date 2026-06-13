@@ -506,6 +506,49 @@ def normalize_strategy_response(raw: dict[str, Any], fallback_objective: str = "
     ).to_dict()
 
 
+def reconcile_strategy_decision(
+    decision: dict[str, Any],
+    objective: str,
+    observation: dict[str, Any],
+    production_targets: dict[str, float] | None = None,
+) -> dict[str, Any]:
+    """Apply deterministic safety/feasibility guardrails to an LLM strategy choice."""
+
+    selected = str(decision.get("selected_skill") or decision.get("selected_goal") or "")
+    if (
+        selected == "produce_electronic_circuit"
+        and _technology_researched(observation, "automation")
+        and _target_deficit_exists(objective, observation, production_targets, "electronic-circuit")
+        and not _circuit_automation_ready(observation)
+    ):
+        adjusted = dict(decision)
+        adjusted["selected_skill"] = "automate_electronic_circuit_line"
+        adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 85)
+        original_reason = str(decision.get("reason") or "").strip()
+        guardrail_reason = (
+            "LLM selected hand circuit production for a per-minute electronic-circuit deficit, "
+            "but Automation is researched and no powered circuit cell is ready."
+        )
+        adjusted["reason"] = f"{guardrail_reason} {original_reason}".strip()
+        adjusted["blockers"] = sorted(set(_string_list(decision.get("blockers")) + ["assembler-based electronic circuit production"]))
+        adjusted["evidence"] = _string_list(decision.get("evidence")) + [
+            "guardrail_adjusted_from=produce_electronic_circuit",
+            "automation_researched=true",
+            "electronic_circuit_target_deficit=true",
+            "circuit_automation_ready=false",
+        ]
+        adjusted["expected_effect"] = (
+            "Build the first powered assembler cell for electronic circuits instead of repeatedly hand-crafting circuits."
+        )
+        adjusted["guardrail_adjusted"] = {
+            "from": "produce_electronic_circuit",
+            "to": "automate_electronic_circuit_line",
+            "reason": guardrail_reason,
+        }
+        return adjusted
+    return decision
+
+
 def heuristic_strategy(
     objective: str,
     observation: dict[str, Any],
@@ -744,6 +787,27 @@ def _skill_for_bottleneck_item(item: str, observation: dict[str, Any]) -> str | 
             return "automate_electronic_circuit_line"
         return "produce_electronic_circuit"
     return None
+
+
+def _target_deficit_exists(
+    objective: str,
+    observation: dict[str, Any],
+    production_targets: dict[str, float] | None,
+    item: str,
+) -> bool:
+    if not production_targets or float(production_targets.get(item) or 0.0) <= 0.0:
+        return False
+    monitor = summarize_factory(observation, objective, production_targets=production_targets)
+    target_status = monitor.get("target_status")
+    if isinstance(target_status, dict):
+        target_rows = target_status.get("items") if isinstance(target_status.get("items"), list) else []
+    else:
+        target_rows = target_status if isinstance(target_status, list) else []
+    for row in target_rows:
+        if not isinstance(row, dict) or row.get("item") != item:
+            continue
+        return float(row.get("deficit_per_minute") or 0.0) > 0.0
+    return False
 
 
 def _technology_researched(observation: dict[str, Any], technology: str) -> bool:

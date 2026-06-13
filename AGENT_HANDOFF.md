@@ -3,6 +3,15 @@
 This file is the compact handoff context for running the project from Codex CLI,
 Claude, or another coding agent.
 
+For the most current and detailed continuation context, read:
+
+```text
+LLM_CONTINUATION.md
+```
+
+That file supersedes older part-specific notes in this handoff when there is a
+conflict.
+
 ## Current Objective
 
 Build a Factorio AI autoplayer that can eventually launch a rocket using a real
@@ -40,31 +49,26 @@ Current branch:
 git branch --show-current
 ```
 
-Current remote before rename:
+Current remote:
 
 ```text
-https://github.com/Schwalbe262/Factorio.git
+https://github.com/Schwalbe262/Factorio_automation.git
 ```
 
-User requested the GitHub repository name be changed to:
-
-```text
-Factorio_automation
-```
-
-After the rename, update local origin:
+If a clone still points at the old repository name, update local origin:
 
 ```powershell
 git remote set-url origin https://github.com/Schwalbe262/Factorio_automation.git
 ```
 
-Latest committed part at the time this handoff was written:
+Latest committed part before the current continuation work:
 
 ```text
-041e17b Part 33: improve no-mod power and research automation
+283d387 Part 41: add background layout simulation
 ```
 
-There are uncommitted Part 34 changes in the Factorio repo at this point.
+The current continuation work should be committed as the next part after tests
+and live checks pass.
 
 ## Important External Project
 
@@ -306,6 +310,9 @@ Key constraints to preserve:
   tick-level action.
 - If LLM selects a missing skill, do not fake it. Record missing skill and have
   Codex implement the deterministic executor.
+- While Codex is implementing a missing executor, the autopilot should keep
+  submitting background `layout_improvement_request` work as
+  `codex_wait:<skill>` so Slurm LLM cycles continue improving site layouts.
 - Site placement matters. Avoid building early factories on top of resource
   patches when possible.
 - Logistic links should be between sites, not individual belts.

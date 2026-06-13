@@ -8,7 +8,7 @@ from .config import AppConfig
 from .rcon import FactorioRconClient, parse_json_response
 
 
-OBSERVE_RADIUS = 512
+OBSERVE_RADIUS = 768
 ALLOWED_ACTION_TYPES = {
     "build",
     "chart",

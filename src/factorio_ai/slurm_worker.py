@@ -17,7 +17,7 @@ from .planner import (
     factory_layout_structure,
 )
 from .skill_registry import IMPLEMENTED_SKILLS
-from .strategy import heuristic_strategy, make_strategy_payload, normalize_strategy_response
+from .strategy import heuristic_strategy, make_strategy_payload, normalize_strategy_response, reconcile_strategy_decision
 
 
 DEFAULT_POLL_SECONDS = 1.0
@@ -233,14 +233,22 @@ def compact_layout_improvement_payload(payload: dict[str, Any]) -> dict[str, Any
     factory_sites = monitor.get("factory_sites") if isinstance(monitor.get("factory_sites"), list) else []
     logistics_links = monitor.get("logistics_links") if isinstance(monitor.get("logistics_links"), list) else []
     layout_improvement = _layout_improvement_context(observation, factory_sites, logistics_links)
-    return {
-        "objective": payload.get("objective") or "launch_rocket_program",
-        "active_skill": payload.get("active_skill"),
-        "active_step": payload.get("active_step"),
-        "instruction": (
+    active_skill = str(payload.get("active_skill") or "")
+    if active_skill.startswith("codex_wait:"):
+        instruction = (
+            "A selected skill is blocked because its deterministic executor is not ready yet. "
+            "Keep improving site layout designs in simulation only until Codex reports that the executor work is complete."
+        )
+    else:
+        instruction = (
             "The active skill is still running. Keep improving site layout designs in simulation only "
             "until the active skill reports completion."
-        ),
+        )
+    return {
+        "objective": payload.get("objective") or "launch_rocket_program",
+        "active_skill": active_skill or None,
+        "active_step": payload.get("active_step"),
+        "instruction": instruction,
         "production_targets": _dict_head(payload.get("production_targets"), 16),
         "layout_improvement": layout_improvement,
         "rules": [
@@ -409,6 +417,7 @@ def try_llm_strategy_with_diagnostics(payload: dict[str, Any]) -> tuple[dict[str
         diagnostics.setdefault("llm_error", "LLM unavailable or invalid JSON response")
         return None, diagnostics
     normalized = normalize_strategy_response(parsed, fallback_objective=objective)
+    normalized = reconcile_strategy_decision(normalized, objective, observation, production_targets)
     allowed = set(base_payload.get("allowed_skill_names") if isinstance(base_payload.get("allowed_skill_names"), list) else [])
     if allowed and normalized.get("selected_skill") not in allowed:
         diagnostics["llm_error"] = f"selected_skill not allowed: {normalized.get('selected_skill')}"

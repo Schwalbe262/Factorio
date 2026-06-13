@@ -2,6 +2,12 @@
 
 Layered Factorio AI autoplayer MVP.
 
+For another LLM, Codex CLI session, Claude session, or future agent continuing
+this work, read `LLM_CONTINUATION.md` first. It contains the current
+architecture, Slurm worker state, strategy guardrails, no-mod runtime commands,
+layout-improvement workflow, training-data direction, and next implementation
+targets.
+
 The local machine runs Factorio and controls it through RCON. There are two development adapters:
 
 1. No-custom-mod RCON/Lua for multiplayer-compatible vanilla servers. Other players do not need the
@@ -39,6 +45,13 @@ mining, building, item insertion, retries, and local validation.
 If the strategic LLM selects a skill whose executor does not exist yet, the controller must not fake
 or improvise game actions. It records the missing skill in `runtime/missing-skills.jsonl`; Codex then
 implements that skill as a normal code change.
+
+Strategic decisions are also passed through deterministic guardrails. For
+example, if the LLM chooses `produce_electronic_circuit` for a sustained
+per-minute electronic-circuit deficit after Automation is researched, the local
+guardrail promotes the decision to `automate_electronic_circuit_line` and logs
+the adjustment. This keeps the LLM in charge of strategy while preventing
+obvious regressions into repeated hand crafting.
 
 ## LLM Context Budget
 
@@ -413,6 +426,9 @@ The intended planner flow is:
 `plan_factory_site` is implemented as a safe planning skill. It does not demolish or build anything.
 When urgent production, defense, research, and power work are not blocking progress, the LLM can use
 idle strategy cycles to inspect the current site graph and generate simulated improvement candidates.
+The same background layout loop also runs when a strategy cycle is blocked because the selected skill
+has no deterministic executor yet. In that case the active skill is logged as `codex_wait:<skill>`,
+and Slurm keeps evaluating layout candidates while Codex implements the missing build logic.
 
 The current layout evaluator separates:
 
