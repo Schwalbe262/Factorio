@@ -161,6 +161,21 @@ Run the first no-custom-mod iron plate automation proof:
 factorio-ai run-no-mod-iron-mvp --target 10 --max-steps 120
 ```
 
+Run the next no-custom-mod material proofs:
+
+```powershell
+factorio-ai run-no-mod-copper-mvp --target 5 --max-steps 140
+factorio-ai run-no-mod-circuit-mvp --target 2 --max-steps 180
+factorio-ai run-no-mod-science-mvp --target 1 --max-steps 260
+```
+
+Ask and execute the strategic layer through the no-custom-mod adapter:
+
+```powershell
+factorio-ai no-mod-strategy --objective launch_rocket_program
+factorio-ai run-no-mod-strategy-step --objective launch_rocket_program --target 3 --max-steps 120
+```
+
 Or use:
 
 ```bat

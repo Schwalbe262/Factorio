@@ -168,6 +168,13 @@ def main(argv: list[str] | None = None) -> None:
     strategy_parser.add_argument("--objective", default="launch_rocket_program")
     strategy_parser.add_argument("--require-llm", action="store_true")
 
+    no_mod_strategy_parser = subparsers.add_parser(
+        "no-mod-strategy",
+        help="Ask the strategic layer using no-custom-mod RCON/Lua observation",
+    )
+    no_mod_strategy_parser.add_argument("--objective", default="launch_rocket_program")
+    no_mod_strategy_parser.add_argument("--require-llm", action="store_true")
+
     strategy_step_parser = subparsers.add_parser(
         "run-strategy-step",
         help="Ask the strategic layer for one high-level skill and execute it if implemented",
@@ -176,6 +183,15 @@ def main(argv: list[str] | None = None) -> None:
     strategy_step_parser.add_argument("--require-llm", action="store_true")
     strategy_step_parser.add_argument("--target", type=int, help="Override the selected skill item target count")
     strategy_step_parser.add_argument("--max-steps", type=int, help="Override the selected skill max step count")
+
+    no_mod_strategy_step_parser = subparsers.add_parser(
+        "run-no-mod-strategy-step",
+        help="Ask the strategic layer for one high-level skill and execute it through no-custom-mod RCON/Lua",
+    )
+    no_mod_strategy_step_parser.add_argument("--objective", default="launch_rocket_program")
+    no_mod_strategy_step_parser.add_argument("--require-llm", action="store_true")
+    no_mod_strategy_step_parser.add_argument("--target", type=int, help="Override the selected skill item target count")
+    no_mod_strategy_step_parser.add_argument("--max-steps", type=int, help="Override the selected skill max step count")
 
     web_parser = subparsers.add_parser("web", help="Serve the Factorio production monitor at /factorio")
     web_parser.add_argument("--host", default="0.0.0.0")
@@ -200,13 +216,34 @@ def main(argv: list[str] | None = None) -> None:
     copper_parser.add_argument("--target", type=int, default=10)
     copper_parser.add_argument("--max-steps", type=int, default=250)
 
+    no_mod_copper_parser = subparsers.add_parser(
+        "run-no-mod-copper-mvp",
+        help="Run the copper plate MVP loop through the no-custom-mod RCON/Lua adapter",
+    )
+    no_mod_copper_parser.add_argument("--target", type=int, default=10)
+    no_mod_copper_parser.add_argument("--max-steps", type=int, default=250)
+
     circuit_parser = subparsers.add_parser("run-circuit-mvp", help="Run the electronic circuit MVP loop")
     circuit_parser.add_argument("--target", type=int, default=5)
     circuit_parser.add_argument("--max-steps", type=int, default=500)
 
+    no_mod_circuit_parser = subparsers.add_parser(
+        "run-no-mod-circuit-mvp",
+        help="Run the electronic circuit MVP loop through the no-custom-mod RCON/Lua adapter",
+    )
+    no_mod_circuit_parser.add_argument("--target", type=int, default=5)
+    no_mod_circuit_parser.add_argument("--max-steps", type=int, default=500)
+
     science_parser = subparsers.add_parser("run-science-mvp", help="Run the automation science MVP loop")
     science_parser.add_argument("--target", type=int, default=5)
     science_parser.add_argument("--max-steps", type=int, default=400)
+
+    no_mod_science_parser = subparsers.add_parser(
+        "run-no-mod-science-mvp",
+        help="Run the automation science MVP loop through the no-custom-mod RCON/Lua adapter",
+    )
+    no_mod_science_parser.add_argument("--target", type=int, default=5)
+    no_mod_science_parser.add_argument("--max-steps", type=int, default=500)
 
     belt_smelting_parser = subparsers.add_parser(
         "run-belt-smelting-mvp",
@@ -536,6 +573,18 @@ def main(argv: list[str] | None = None) -> None:
         print_json(FactorioController(cfg).strategy_decision(args.objective, require_llm=require_llm))
         return
 
+    if args.command == "no-mod-strategy":
+        require_llm = args.require_llm or os.getenv("FACTORIO_AI_REQUIRE_LLM_STRATEGY", "").lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        payload = ModlessFactorioController(cfg).strategy_decision(args.objective, require_llm=require_llm)
+        payload["adapter"] = "no-mod-rcon-lua"
+        print_json(payload)
+        return
+
     if args.command == "run-strategy-step":
         require_llm = args.require_llm or os.getenv("FACTORIO_AI_REQUIRE_LLM_STRATEGY", "").lower() in {
             "1",
@@ -550,6 +599,26 @@ def main(argv: list[str] | None = None) -> None:
             max_steps=args.max_steps,
         )
         print_json(summary.to_dict())
+        if not summary.ok:
+            raise SystemExit(1)
+        return
+
+    if args.command == "run-no-mod-strategy-step":
+        require_llm = args.require_llm or os.getenv("FACTORIO_AI_REQUIRE_LLM_STRATEGY", "").lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        summary = ModlessFactorioController(cfg).run_strategy_step(
+            objective=args.objective,
+            require_llm=require_llm,
+            target_count=args.target,
+            max_steps=args.max_steps,
+        )
+        payload = summary.to_dict()
+        payload["adapter"] = "no-mod-rcon-lua"
+        print_json(payload)
         if not summary.ok:
             raise SystemExit(1)
         return
@@ -623,6 +692,22 @@ def main(argv: list[str] | None = None) -> None:
             raise SystemExit(1)
         return
 
+    if args.command == "run-no-mod-copper-mvp":
+        summary = ModlessFactorioController(cfg).run_copper_mvp(target=args.target, max_steps=args.max_steps)
+        print_json(
+            {
+                "ok": summary.ok,
+                "reason": summary.reason,
+                "steps": summary.steps,
+                "copperPlateCount": summary.item_count,
+                "logPath": str(summary.log_path),
+                "mode": "no-mod-rcon-lua",
+            }
+        )
+        if not summary.ok:
+            raise SystemExit(1)
+        return
+
     if args.command == "run-circuit-mvp":
         summary = FactorioController(cfg).run_circuit_mvp(target=args.target, max_steps=args.max_steps)
         print_json(
@@ -638,6 +723,22 @@ def main(argv: list[str] | None = None) -> None:
             raise SystemExit(1)
         return
 
+    if args.command == "run-no-mod-circuit-mvp":
+        summary = ModlessFactorioController(cfg).run_circuit_mvp(target=args.target, max_steps=args.max_steps)
+        print_json(
+            {
+                "ok": summary.ok,
+                "reason": summary.reason,
+                "steps": summary.steps,
+                "electronicCircuitCount": summary.item_count,
+                "logPath": str(summary.log_path),
+                "mode": "no-mod-rcon-lua",
+            }
+        )
+        if not summary.ok:
+            raise SystemExit(1)
+        return
+
     if args.command == "run-science-mvp":
         summary = FactorioController(cfg).run_science_mvp(target=args.target, max_steps=args.max_steps)
         print_json(
@@ -647,6 +748,22 @@ def main(argv: list[str] | None = None) -> None:
                 "steps": summary.steps,
                 "automationSciencePackCount": summary.item_count,
                 "logPath": str(summary.log_path),
+            }
+        )
+        if not summary.ok:
+            raise SystemExit(1)
+        return
+
+    if args.command == "run-no-mod-science-mvp":
+        summary = ModlessFactorioController(cfg).run_science_mvp(target=args.target, max_steps=args.max_steps)
+        print_json(
+            {
+                "ok": summary.ok,
+                "reason": summary.reason,
+                "steps": summary.steps,
+                "automationSciencePackCount": summary.item_count,
+                "logPath": str(summary.log_path),
+                "mode": "no-mod-rcon-lua",
             }
         )
         if not summary.ok:
