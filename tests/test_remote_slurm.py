@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from factorio_ai.remote_slurm import (
     RemoteSlurmConfig,
@@ -6,6 +7,8 @@ from factorio_ai.remote_slurm import (
     _gpu_allocation_visible,
     _llm_status_remediation,
     _status_needs_local_gpu,
+    _worker_env_values,
+    config,
 )
 from factorio_ai.slurm_worker import run_strategy_model_benchmark
 
@@ -26,6 +29,7 @@ class RemoteSlurmTests(unittest.TestCase):
             partition="gpu",
             cpus_per_task=8,
             gpus_per_node=1,
+            gres="gpu:1",
             time_limit="24:00:00",
             setup_timeout_seconds=60,
             task_timeout_seconds=30,
@@ -52,6 +56,7 @@ class RemoteSlurmTests(unittest.TestCase):
             partition="gpu",
             cpus_per_task=8,
             gpus_per_node=1,
+            gres="gpu:1",
             time_limit="24:00:00",
             setup_timeout_seconds=60,
             task_timeout_seconds=30,
@@ -63,7 +68,7 @@ class RemoteSlurmTests(unittest.TestCase):
             {"count": 0, "env": {"CUDA_VISIBLE_DEVICES": "none"}},
         )
         self.assertTrue(remediation["required_gpu_allocation"]["needed"])
-        self.assertIn("SUPERCOMPUTER_WORKER_GPUS_PER_NODE=1", remediation["required_gpu_allocation"]["auto_worker_env"])
+        self.assertIn("FACTORIO_AI_SLURM_GPUS_PER_NODE=1", remediation["required_gpu_allocation"]["factorio_worker_env"])
 
     def test_llm_status_remediation_marks_pending_gpu_allocation(self):
         cfg = RemoteSlurmConfig(
@@ -80,18 +85,69 @@ class RemoteSlurmTests(unittest.TestCase):
             partition="gpu",
             cpus_per_task=8,
             gpus_per_node=3,
+            gres="gpu:a6000ada:3",
             time_limit="24:00:00",
             setup_timeout_seconds=60,
             task_timeout_seconds=30,
         )
         remediation = _llm_status_remediation(
-            ["AUTO job pending GPU allocation", "GPU allocation"],
+            ["Slurm worker job pending GPU allocation", "GPU allocation"],
             cfg,
             False,
             None,
         )
         self.assertIn("not allocated the requested GPUs yet", remediation["why"])
         self.assertTrue(remediation["required_gpu_allocation"]["needed"])
+
+    def test_config_defaults_to_factorio_owned_worker(self):
+        with patch.dict("os.environ", {"USERPROFILE": "C:\\Users\\Test"}, clear=True):
+            cfg = config()
+        self.assertEqual(cfg.remote_dir, "~/factorio-ai-worker")
+        self.assertEqual(cfg.job_name, "factorio-ai-worker")
+        self.assertEqual(cfg.gres, "gpu:1")
+
+    def test_config_prefers_factorio_remote_dir_and_typed_gres(self):
+        with patch.dict(
+            "os.environ",
+            {
+                "SUPERCOMPUTER_WORKER_REMOTE_DIR": "~/kakao-bot-worker",
+                "FACTORIO_AI_SLURM_REMOTE_DIR": "~/factorio-ai-worker",
+                "FACTORIO_AI_SLURM_GPUS_PER_NODE": "3",
+                "FACTORIO_AI_SLURM_GRES": "gpu:a6000ada:3",
+                "USERPROFILE": "C:\\Users\\Test",
+            },
+            clear=True,
+        ):
+            cfg = config()
+        self.assertEqual(cfg.remote_dir, "~/factorio-ai-worker")
+        self.assertEqual(cfg.gpus_per_node, 3)
+        self.assertEqual(cfg.gres, "gpu:a6000ada:3")
+
+    def test_worker_env_values_derives_loopback_endpoint_for_vllm(self):
+        cfg = RemoteSlurmConfig(
+            enabled=True,
+            ssh_path="ssh",
+            scp_path="scp",
+            host="example",
+            user="user",
+            port=22,
+            key_path="key",
+            remote_dir="~/factorio-ai-worker",
+            job_name="factorio-ai-worker",
+            conda_env="factorio-ai",
+            partition="gpu3",
+            cpus_per_task=8,
+            gpus_per_node=3,
+            gres="gpu:a6000ada:3",
+            time_limit="24:00:00",
+            setup_timeout_seconds=60,
+            task_timeout_seconds=30,
+        )
+        with patch.dict("os.environ", {"FACTORIO_AI_VLLM_MODEL": "Qwen/test", "FACTORIO_AI_VLLM_PORT": "8001"}, clear=True):
+            values = _worker_env_values(cfg)
+        self.assertEqual(values["FACTORIO_AI_SLURM_CONDA_ENV"], "factorio-ai")
+        self.assertEqual(values["FACTORIO_AI_LLM_MODEL"], "Qwen/test")
+        self.assertEqual(values["FACTORIO_AI_LLM_BASE_URL"], "http://127.0.0.1:8001/v1")
 
     def test_gpu_allocation_visible_from_nvidia_or_slurm_env(self):
         self.assertTrue(_gpu_allocation_visible({"count": 1, "env": {}}))

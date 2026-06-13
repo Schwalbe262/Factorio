@@ -10,7 +10,7 @@
 
 set -euo pipefail
 
-ROOT_RAW="${ROOT:-${SUPERCOMPUTER_WORKER_REMOTE_DIR:-$PWD}}"
+ROOT_RAW="${ROOT:-${FACTORIO_AI_SLURM_REMOTE_DIR:-${SUPERCOMPUTER_WORKER_REMOTE_DIR:-$PWD}}}"
 if [[ "$ROOT_RAW" == "~" ]]; then
   ROOT="$HOME"
 elif [[ "$ROOT_RAW" == "~/"* ]]; then
@@ -19,6 +19,14 @@ elif [[ "$ROOT_RAW" == /* ]]; then
   ROOT="$ROOT_RAW"
 else
   ROOT="$PWD/$ROOT_RAW"
+fi
+
+if [[ -f "$ROOT/config.env" ]]; then
+  while IFS='=' read -r key value; do
+    [[ -n "$key" && "$key" == FACTORIO_AI_* ]] || continue
+    value="${value//\\n/$'\n'}"
+    export "$key=$value"
+  done < "$ROOT/config.env"
 fi
 
 ENV_NAME="${FACTORIO_AI_SLURM_CONDA_ENV:-factorio-ai}"
@@ -47,6 +55,13 @@ else
 fi
 
 if [[ -n "${FACTORIO_AI_VLLM_MODEL:-}" ]]; then
+  if [[ -n "${FACTORIO_AI_HF_HOME:-}" ]]; then
+    export HF_HOME="$FACTORIO_AI_HF_HOME"
+  else
+    export HF_HOME="$ROOT/hf-cache"
+  fi
+  export HUGGINGFACE_HUB_CACHE="$HF_HOME/hub"
+  mkdir -p "$HUGGINGFACE_HUB_CACHE"
   VLLM_PORT="${FACTORIO_AI_VLLM_PORT:-8000}"
   export FACTORIO_AI_LLM_BASE_URL="${FACTORIO_AI_LLM_BASE_URL:-http://127.0.0.1:${VLLM_PORT}/v1}"
   export FACTORIO_AI_LLM_MODEL="${FACTORIO_AI_LLM_MODEL:-$FACTORIO_AI_VLLM_MODEL}"

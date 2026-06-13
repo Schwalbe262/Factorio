@@ -21,8 +21,8 @@ DEFAULT_HOST = "172.16.10.37"
 DEFAULT_USER = "r1jae262"
 DEFAULT_PORT = 22
 DEFAULT_KEY_NAME = "r1jae262.pem"
-DEFAULT_REMOTE_DIR = "~/kakao-bot-worker"
-DEFAULT_JOB_NAME = "AUTO"
+DEFAULT_REMOTE_DIR = "~/factorio-ai-worker"
+DEFAULT_JOB_NAME = "factorio-ai-worker"
 DEFAULT_CONDA_ENV = "factorio-ai"
 LLM_ENV_VARS = (
     "FACTORIO_AI_LLM_BASE_URL",
@@ -32,6 +32,7 @@ LLM_ENV_VARS = (
     "FACTORIO_AI_LLM_TIMEOUT",
 )
 VLLM_ENV_VARS = (
+    "FACTORIO_AI_HF_HOME",
     "FACTORIO_AI_VLLM_MODEL",
     "FACTORIO_AI_VLLM_PORT",
     "FACTORIO_AI_VLLM_ARGS",
@@ -65,6 +66,7 @@ class RemoteSlurmConfig:
     partition: str
     cpus_per_task: int
     gpus_per_node: int
+    gres: str
     time_limit: str
     setup_timeout_seconds: int
     task_timeout_seconds: int
@@ -80,21 +82,44 @@ def config() -> RemoteSlurmConfig:
         user=os.getenv("SUPERCOMPUTER_WORKER_SSH_USER") or os.getenv("LICENSE_SSH_USER") or DEFAULT_USER,
         port=_int_env("SUPERCOMPUTER_WORKER_SSH_PORT", _int_env("LICENSE_SSH_PORT", DEFAULT_PORT, 1), 1),
         key_path=os.getenv("SUPERCOMPUTER_WORKER_SSH_KEY") or os.getenv("LICENSE_SSH_KEY") or home_key,
-        remote_dir=os.getenv("SUPERCOMPUTER_WORKER_REMOTE_DIR") or DEFAULT_REMOTE_DIR,
+        remote_dir=os.getenv("FACTORIO_AI_SLURM_REMOTE_DIR")
+        or os.getenv("SUPERCOMPUTER_WORKER_REMOTE_DIR")
+        or DEFAULT_REMOTE_DIR,
         job_name=os.getenv("FACTORIO_AI_SLURM_JOB_NAME") or DEFAULT_JOB_NAME,
         conda_env=os.getenv("FACTORIO_AI_SLURM_CONDA_ENV") or DEFAULT_CONDA_ENV,
         partition=os.getenv("FACTORIO_AI_SLURM_PARTITION") or "gpu4,gpu3,gpu2,gpu1,cpu2,cpu1",
         cpus_per_task=_int_env("FACTORIO_AI_SLURM_CPUS_PER_TASK", 8, 1),
         gpus_per_node=min(3, _int_env("FACTORIO_AI_SLURM_GPUS_PER_NODE", 1, 0)),
+        gres=os.getenv("FACTORIO_AI_SLURM_GRES")
+        or (f"gpu:{min(3, _int_env('FACTORIO_AI_SLURM_GPUS_PER_NODE', 1, 0))}" if _int_env("FACTORIO_AI_SLURM_GPUS_PER_NODE", 1, 0) > 0 else ""),
         time_limit=os.getenv("FACTORIO_AI_SLURM_TIME") or "24:00:00",
         setup_timeout_seconds=_int_env("FACTORIO_AI_SLURM_SETUP_TIMEOUT_SECONDS", 1800, 60),
         task_timeout_seconds=_int_env("FACTORIO_AI_SLURM_TASK_TIMEOUT_SECONDS", 300, 5),
     )
 
 
+def _worker_env_values(cfg: RemoteSlurmConfig) -> dict[str, str]:
+    values = {
+        "FACTORIO_AI_SLURM_CONDA_ENV": cfg.conda_env,
+    }
+    for name in LLM_ENV_VARS + VLLM_ENV_VARS:
+        value = os.getenv(name)
+        if value is not None:
+            values[name] = value
+    if values.get("FACTORIO_AI_VLLM_MODEL") and not values.get("FACTORIO_AI_LLM_MODEL"):
+        values["FACTORIO_AI_LLM_MODEL"] = values["FACTORIO_AI_VLLM_MODEL"]
+    if values.get("FACTORIO_AI_VLLM_MODEL") and not values.get("FACTORIO_AI_LLM_BASE_URL"):
+        port = values.get("FACTORIO_AI_VLLM_PORT") or "8000"
+        values["FACTORIO_AI_LLM_BASE_URL"] = f"http://127.0.0.1:{port}/v1"
+    return values
+
+
 def deploy(cfg: RemoteSlurmConfig | None = None) -> dict[str, Any]:
     cfg = cfg or config()
     remote_dir = resolve_remote_dir(cfg)
+    worker_env = base64.b64encode(json.dumps(_worker_env_values(cfg), separators=(",", ":")).encode("utf-8")).decode(
+        "ascii"
+    )
     with tempfile.TemporaryDirectory(prefix="factorio-ai-deploy-") as temp_dir:
         archive_path = Path(temp_dir) / "factorio-ai.tar.gz"
         _create_archive(archive_path)
@@ -105,9 +130,24 @@ def deploy(cfg: RemoteSlurmConfig | None = None) -> dict[str, Any]:
         f"""set -euo pipefail
 REMOTE_DIR={json.dumps(remote_dir)}
 ENV_NAME={json.dumps(cfg.conda_env)}
+WORKER_ENV={json.dumps(worker_env)}
 mkdir -p "$REMOTE_DIR"/{{queue,running,results,failed,logs}}
 rm -rf "$REMOTE_DIR/factorio-ai"
 tar -xzf "$REMOTE_DIR/factorio-ai.tar.gz" -C "$REMOTE_DIR"
+python3 - "$REMOTE_DIR/config.env" "$WORKER_ENV" <<'PY'
+import base64
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+env = json.loads(base64.b64decode(sys.argv[2]).decode("utf-8"))
+lines = []
+for key in sorted(env):
+    value = str(env[key]).replace(chr(10), " ")
+    lines.append(key + "=" + value)
+path.write_text(chr(10).join(lines) + chr(10), encoding="utf-8")
+PY
 cd "$REMOTE_DIR/factorio-ai"
 if command -v conda >/dev/null 2>&1; then
   eval "$(conda shell.bash hook)"
@@ -140,6 +180,7 @@ ENV_NAME={json.dumps(cfg.conda_env)}
 PARTITION={json.dumps(cfg.partition)}
 CPUS={cfg.cpus_per_task}
 GPUS={cfg.gpus_per_node}
+GRES={json.dumps(cfg.gres)}
 TIME_LIMIT={json.dumps(cfg.time_limit)}
 mkdir -p "$REMOTE_DIR"/logs
 if squeue -h -u "$USER" -n "$JOB_NAME" -t R,PD | awk 'NF{{found=1}} END{{exit !found}}'; then
@@ -152,7 +193,7 @@ job_id="$(sbatch --parsable \\
   --nodes=1 \\
   --ntasks=1 \\
   --cpus-per-task="$CPUS" \\
-  $([[ "$GPUS" -gt 0 ]] && printf -- '--gres=gpu:%s ' "$GPUS") \\
+  $([[ -n "$GRES" ]] && printf -- '--gres=%s ' "$GRES") \\
   --time="$TIME_LIMIT" \\
   --partition="$PARTITION" \\
   --output="$REMOTE_DIR/logs/%x-%j.out" \\
@@ -299,8 +340,8 @@ srun --jobid="$JOB_ID" --overlap -N1 -n1 -c1 bash -lc "$INNER_COMMAND" < /dev/nu
             "local_env": local_env,
             "remote": {"job_running": False, "error": f"{type(exc).__name__}: {exc}"},
             "llm_ready": False,
-            "missing": ["running AUTO job with LLM env"],
-            "remediation": _llm_status_remediation(["running AUTO job with LLM env"], cfg, False, None),
+            "missing": ["running Slurm worker job with LLM env"],
+            "remediation": _llm_status_remediation(["running Slurm worker job with LLM env"], cfg, False, None),
         }
 
     remote_payload: dict[str, Any] = {"job_running": True}
@@ -317,9 +358,9 @@ srun --jobid="$JOB_ID" --overlap -N1 -n1 -c1 bash -lc "$INNER_COMMAND" < /dev/nu
             break
     if remote_payload.get("job_running") is False:
         missing = (
-            ["AUTO job pending GPU allocation", "GPU allocation"]
+            ["Slurm worker job pending GPU allocation", "GPU allocation"]
             if remote_payload.get("job_pending")
-            else ["running AUTO job with LLM env"]
+            else ["running Slurm worker job with LLM env"]
         )
         return {
             "ok": True,
@@ -363,14 +404,14 @@ def _llm_status_remediation(
     if not missing:
         return None
     gpu = gpu or {}
-    if "AUTO job pending GPU allocation" in missing:
+    if "Slurm worker job pending GPU allocation" in missing:
         why = (
-            "AUTO Slurm job is submitted, but Slurm has not allocated the requested GPUs yet. "
+            "Slurm worker job is submitted, but Slurm has not allocated the requested GPUs yet. "
             "The local LLM endpoint will only be available after that pending job starts."
         )
     else:
         why = (
-            "AUTO Slurm allocation exists, but strategy requests cannot use a local LLM until "
+            "Slurm worker allocation exists, but strategy requests cannot use a local LLM until "
             "the LLM endpoint variables, Factorio AI code, and GPU allocation are visible inside the attached job."
         )
     return {
@@ -378,14 +419,17 @@ def _llm_status_remediation(
         "required_remote_env": ["FACTORIO_AI_LLM_BASE_URL", "FACTORIO_AI_LLM_MODEL"],
         "optional_remote_env": ["FACTORIO_AI_LLM_API_KEY", "FACTORIO_AI_LLM_GUIDED_JSON", "FACTORIO_AI_LLM_TIMEOUT"],
         "required_gpu_allocation": {
-            "needed": "GPU allocation" in missing or "AUTO job pending GPU allocation" in missing,
+            "needed": "GPU allocation" in missing or "Slurm worker job pending GPU allocation" in missing,
             "current": gpu,
-            "auto_worker_env": [
+            "factorio_worker_env": [
+                "FACTORIO_AI_SLURM_GPUS_PER_NODE=1",
+                "FACTORIO_AI_SLURM_GRES=gpu:1",
+            ],
+            "legacy_kakao_auto_env": [
                 "SUPERCOMPUTER_WORKER_GPUS_PER_NODE=1",
                 "SUPERCOMPUTER_WORKER_GRES=gpu:1",
             ],
-            "factorio_worker_env": ["FACTORIO_AI_SLURM_GPUS_PER_NODE=1"],
-            "sbatch_option": "--gres=gpu:1",
+            "sbatch_option": f"--gres={cfg.gres or 'gpu:1'}",
         },
         "required_deployment": {
             "needed": "Factorio AI deployment" in missing,
@@ -402,9 +446,9 @@ def _llm_status_remediation(
             "factorio-ai slurm-start-worker",
         ],
         "example_auto_reopen": [
-            "export SUPERCOMPUTER_WORKER_GPUS_PER_NODE=1",
-            "export SUPERCOMPUTER_WORKER_GRES=gpu:1",
-            "/worker start",
+            "export FACTORIO_AI_SLURM_GPUS_PER_NODE=1",
+            "export FACTORIO_AI_SLURM_GRES=gpu:1",
+            "factorio-ai slurm-start-worker",
         ],
         "remote_dir": cfg.remote_dir,
         "job_name": cfg.job_name,

@@ -479,13 +479,18 @@ The remote worker follows the same shape as the reference projects:
 - `failed/`
 - `logs/`
 
-Default remote directory: `~/kakao-bot-worker`
+Default remote directory: `~/factorio-ai-worker`
 
-Default job name: `AUTO`
+Default job name: `factorio-ai-worker`
 
-When the running job is `AUTO`, planner requests use `srun --jobid=<AUTO_JOB_ID> --overlap`
-to execute `factorio_ai.slurm_worker --task ...` inside the existing AUTO allocation. This avoids
-submitting another Slurm job and does not require replacing the existing flight worker loop.
+The Factorio worker owns its Slurm queue and job name by default. This keeps it separate from the
+Kakao/Telegram bot `AUTO` worker and from crypto-lab jobs such as `optimization`, so a cancel action
+in another project does not accidentally cancel the Factorio LLM worker.
+
+Legacy attach mode still exists for experiments: if `FACTORIO_AI_SLURM_JOB_NAME=AUTO`,
+`FACTORIO_AI_SLURM_REMOTE_DIR=~/kakao-bot-worker`, and `FACTORIO_AI_SLURM_MODE=attach` are set,
+planner requests use `srun --jobid=<AUTO_JOB_ID> --overlap` inside the existing Kakao allocation.
+That mode is no longer the default because shared `AUTO` ownership is easy to confuse.
 
 Common environment variables:
 
@@ -493,22 +498,33 @@ Common environment variables:
 - `SUPERCOMPUTER_WORKER_SSH_USER`
 - `SUPERCOMPUTER_WORKER_SSH_KEY`
 - `SUPERCOMPUTER_WORKER_SSH_PORT`
-- `SUPERCOMPUTER_WORKER_REMOTE_DIR`
+- `FACTORIO_AI_SLURM_REMOTE_DIR=~/factorio-ai-worker`
+- `FACTORIO_AI_SLURM_JOB_NAME=factorio-ai-worker`
 - `FACTORIO_AI_SLURM_ENABLED=1`
-- `FACTORIO_AI_SLURM_GPUS_PER_NODE=1`
-- `FACTORIO_AI_VLLM_MODEL=Qwen/Qwen3.5-4B`
+- `FACTORIO_AI_SLURM_GPUS_PER_NODE=3`
+- `FACTORIO_AI_SLURM_GRES=gpu:a6000ada:3`
+- `FACTORIO_AI_SLURM_PARTITION=gpu3`
+- `FACTORIO_AI_VLLM_MODEL=Qwen/Qwen3.6-27B-FP8`
 - `FACTORIO_AI_LLM_BASE_URL=http://127.0.0.1:8000/v1`
 - `FACTORIO_AI_LLM_MODEL=<model-name>`
 
-When reusing the Kakao `AUTO` worker allocation, open future AUTO jobs with GPU GRES enabled:
+Start the dedicated Factorio worker:
 
 ```powershell
-$env:SUPERCOMPUTER_WORKER_GPUS_PER_NODE="1"
-$env:SUPERCOMPUTER_WORKER_GRES="gpu:1"
+$env:FACTORIO_AI_SLURM_ENABLED="1"
+$env:FACTORIO_AI_SLURM_REMOTE_DIR="~/factorio-ai-worker"
+$env:FACTORIO_AI_SLURM_JOB_NAME="factorio-ai-worker"
+$env:FACTORIO_AI_SLURM_GPUS_PER_NODE="3"
+$env:FACTORIO_AI_SLURM_GRES="gpu:a6000ada:3"
+$env:FACTORIO_AI_SLURM_PARTITION="gpu3"
+$env:FACTORIO_AI_VLLM_MODEL="Qwen/Qwen3.6-27B-FP8"
+$env:FACTORIO_AI_VLLM_ARGS="--tensor-parallel-size 3 --max-model-len 8192 --gpu-memory-utilization 0.85"
+factorio-ai slurm-start-worker
 ```
 
-If the AUTO job is already running without GPU allocation, it must be replaced before local vLLM can
-use CUDA. `slurm-llm-status` reports this as `GPU allocation` in `missing`.
+If the worker is pending, `slurm-llm-status` reports `Slurm worker job pending GPU allocation`.
+If it is running without visible CUDA devices, the same command reports `GPU allocation` in
+`missing`.
 
 Submit a test task:
 
@@ -516,7 +532,7 @@ Submit a test task:
 factorio-ai slurm-submit-test
 ```
 
-Check whether the AUTO allocation can actually run LLM strategy requests:
+Check whether the worker allocation can actually run LLM strategy requests:
 
 ```powershell
 factorio-ai slurm-llm-status
