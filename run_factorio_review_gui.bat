@@ -3,7 +3,8 @@ setlocal
 cd /d "%~dp0"
 set PYTHONPATH=src
 
-echo [factorio-ai] Opening a GUI review client for the current AI world...
+echo [factorio-ai] Opening a local development GUI review client for the current AI world...
+echo [factorio-ai] This uses the mod/RCON development server and is not achievement-compatible multiplayer.
 echo [factorio-ai] If no local AI server is running, this will start one first.
 echo [factorio-ai] Close the Factorio window when you are done inspecting.
 if not exist runtime mkdir runtime

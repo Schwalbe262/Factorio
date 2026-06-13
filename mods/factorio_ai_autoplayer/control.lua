@@ -168,6 +168,19 @@ local function distance(a, b)
   return math.sqrt(dx * dx + dy * dy)
 end
 
+local function surface_pollution(surface, position)
+  if not surface or not position then
+    return nil
+  end
+  local ok, value = pcall(function()
+    return surface.get_pollution(position)
+  end)
+  if ok and type(value) == "number" then
+    return round(value)
+  end
+  return nil
+end
+
 local function walking_direction(dx, dy)
   local x = 0
   local y = 0
@@ -591,9 +604,45 @@ local function record_factory_event(action, event)
     surface = entity.surface and entity.surface.name or nil,
     position = position_table(entity.position)
   }
+  if event.cause and event.cause.valid then
+    record.cause = event.cause.name
+    record.cause_type = event.cause.type
+    record.cause_force = event.cause.force and event.cause.force.name or nil
+  end
+  if event.damage_type and event.damage_type.name then
+    record.damage_type = event.damage_type.name
+  end
+  if type(event.final_damage_amount) == "number" then
+    record.damage = round(event.final_damage_amount)
+  end
+  if type(entity.health) == "number" then
+    record.health = round(entity.health)
+  end
   storage.entity_modifications = storage.entity_modifications or {}
   storage.entity_modifications[entity_identity_key(entity)] = record
   push_factory_event(record)
+end
+
+local function record_enemy_damage_event(action, event)
+  local entity = event and event.entity
+  if not entity or not entity.valid or entity.force ~= game.forces.player then
+    return
+  end
+  local cause = event.cause
+  if cause and cause.valid and cause.force ~= game.forces.enemy then
+    return
+  end
+  if action == "damaged" then
+    storage.damage_event_ticks = storage.damage_event_ticks or {}
+    local key = entity_identity_key(entity)
+    local tick = event.tick or game.tick
+    local last_tick = storage.damage_event_ticks[key] or 0
+    if tick - last_tick < 300 then
+      return
+    end
+    storage.damage_event_ticks[key] = tick
+  end
+  record_factory_event(action, event)
 end
 
 local function collect_resources(surface, position)
@@ -741,7 +790,9 @@ local function collect_enemies(surface, position, force)
         local key = entity_identity_key(entity)
         if not seen[key] then
           seen[key] = true
-          table.insert(enemies, entity_snapshot(entity, position))
+          local snapshot = entity_snapshot(entity, position)
+          snapshot.pollution = surface_pollution(surface, entity.position)
+          table.insert(enemies, snapshot)
         end
       end
     end
@@ -750,6 +801,12 @@ local function collect_enemies(surface, position, force)
     return a.distance < b.distance
   end)
   return enemies
+end
+
+local function collect_pollution(surface, position)
+  return {
+    at_player = surface_pollution(surface, position) or 0
+  }
 end
 
 local function collect_factory_events(position)
@@ -1273,6 +1330,7 @@ local function observe(command, options)
     resources = collect_resources(surface, position),
     entities = collect_entities(surface, position),
     enemies = collect_enemies(surface, position, agent.force),
+    pollution = collect_pollution(surface, position),
     factory_events = collect_factory_events(position),
     power_sites = collect_power_sites(surface, position, agent.force),
     lab_sites = collect_lab_sites(surface, position, agent.force),
@@ -2018,6 +2076,14 @@ end)
 
 script.on_event(defines.events.on_player_mined_entity, function(event)
   record_factory_event("mined", event)
+end)
+
+script.on_event(defines.events.on_entity_damaged, function(event)
+  record_enemy_damage_event("damaged", event)
+end)
+
+script.on_event(defines.events.on_entity_died, function(event)
+  record_enemy_damage_event("destroyed", event)
 end)
 
 commands.add_command("ai_observe", "Return Factorio AI observation JSON.", function(command)

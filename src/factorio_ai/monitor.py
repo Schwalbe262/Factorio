@@ -94,6 +94,26 @@ class ThroughputConstraint:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class ThreatEstimate:
+    danger_level: str
+    enemy_count: int
+    counts_by_type: dict[str, int]
+    counts_by_name: dict[str, int]
+    nearest_enemy: dict[str, Any] | None
+    nearest_spawner: dict[str, Any] | None
+    nearest_turret: dict[str, Any] | None
+    armed_gun_turret_count: int
+    unarmed_gun_turret_count: int
+    recent_damage_count: int
+    recent_destroyed_count: int
+    max_spawner_pollution: float
+    recommended_actions: list[str]
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
 COMMON_ITEMS = [
     "iron-ore",
     "copper-ore",
@@ -173,6 +193,8 @@ def summarize_factory(
     factory_sites = estimate_factory_sites(observation)
     logistics_links = estimate_logistics_links(observation)
     factory_events = recent_factory_events(observation)
+    damage_events = recent_damage_events(observation)
+    threats = estimate_threats(observation)
     throughput_constraints = estimate_throughput_constraints(observation)
     return {
         "objective": objective,
@@ -188,6 +210,8 @@ def summarize_factory(
         "factory_sites": [item.to_dict() for item in factory_sites],
         "logistics_links": [item.to_dict() for item in logistics_links],
         "factory_events": factory_events,
+        "damage_events": damage_events,
+        "threats": threats.to_dict(),
         "throughput_constraints": [item.to_dict() for item in throughput_constraints],
     }
 
@@ -571,6 +595,11 @@ def recent_factory_events(observation: dict[str, Any], limit: int = 40) -> list[
                 "actor_kind": actor.get("kind"),
                 "entity": item.get("entity"),
                 "unit_number": item.get("unit_number"),
+                "cause": item.get("cause"),
+                "cause_force": item.get("cause_force"),
+                "damage": item.get("damage"),
+                "damage_type": item.get("damage_type"),
+                "health": item.get("health"),
                 "position": item.get("position") if isinstance(item.get("position"), dict) else {},
                 "distance": item.get("distance"),
             }
@@ -578,6 +607,91 @@ def recent_factory_events(observation: dict[str, Any], limit: int = 40) -> list[
         if len(output) >= limit:
             break
     return output
+
+
+def recent_damage_events(observation: dict[str, Any], limit: int = 40) -> list[dict[str, Any]]:
+    damage_actions = {"damaged", "destroyed"}
+    return [item for item in recent_factory_events(observation, limit=limit * 2) if item.get("action") in damage_actions][:limit]
+
+
+def estimate_threats(observation: dict[str, Any]) -> ThreatEstimate:
+    enemies = _enemies(observation)
+    nearest_enemy = _nearest_enemy(enemies)
+    spawners = [item for item in enemies if item.get("type") == "unit-spawner"]
+    turrets = [item for item in enemies if item.get("type") == "turret"]
+    nearest_spawner = _nearest_enemy(spawners)
+    nearest_turret = _nearest_enemy(turrets)
+    damage_events = recent_damage_events(observation, limit=20)
+    recent_destroyed_count = sum(1 for item in damage_events if item.get("action") == "destroyed")
+    counts_by_type = Counter(str(item.get("type") or "unknown") for item in enemies)
+    counts_by_name = Counter(str(item.get("name") or "unknown") for item in enemies)
+    gun_turrets = [item for item in _entities(observation) if item.get("name") == "gun-turret"]
+    armed_gun_turrets = [item for item in gun_turrets if entity_item_count(item, "firearm-magazine") > 0]
+    max_spawner_pollution = max([_safe_float(item.get("pollution")) for item in spawners] or [0.0])
+    danger_level = _threat_danger_level(nearest_enemy, damage_events, max_spawner_pollution)
+    recommended_actions = _threat_recommendations(
+        danger_level=danger_level,
+        recent_destroyed_count=recent_destroyed_count,
+        armed_gun_turret_count=len(armed_gun_turrets),
+        spawner_count=len(spawners),
+        max_spawner_pollution=max_spawner_pollution,
+    )
+    return ThreatEstimate(
+        danger_level=danger_level,
+        enemy_count=len(enemies),
+        counts_by_type=dict(sorted(counts_by_type.items())),
+        counts_by_name=dict(sorted(counts_by_name.items())),
+        nearest_enemy=nearest_enemy,
+        nearest_spawner=nearest_spawner,
+        nearest_turret=nearest_turret,
+        armed_gun_turret_count=len(armed_gun_turrets),
+        unarmed_gun_turret_count=max(0, len(gun_turrets) - len(armed_gun_turrets)),
+        recent_damage_count=len(damage_events),
+        recent_destroyed_count=recent_destroyed_count,
+        max_spawner_pollution=round(max_spawner_pollution, 3),
+        recommended_actions=recommended_actions,
+    )
+
+
+def _threat_danger_level(
+    nearest_enemy: dict[str, Any] | None,
+    damage_events: list[dict[str, Any]],
+    max_spawner_pollution: float,
+) -> str:
+    if any(item.get("action") == "destroyed" for item in damage_events):
+        return "critical"
+    if damage_events:
+        return "high"
+    nearest_distance = _enemy_distance(nearest_enemy)
+    if nearest_distance is not None and nearest_distance <= 32:
+        return "critical"
+    if nearest_distance is not None and nearest_distance <= 96:
+        return "high"
+    if max_spawner_pollution > 0:
+        return "medium"
+    if nearest_enemy:
+        return "low"
+    return "none"
+
+
+def _threat_recommendations(
+    *,
+    danger_level: str,
+    recent_destroyed_count: int,
+    armed_gun_turret_count: int,
+    spawner_count: int,
+    max_spawner_pollution: float,
+) -> list[str]:
+    recommendations: list[str] = []
+    if danger_level in {"critical", "high"} and armed_gun_turret_count <= 0:
+        recommendations.append("run build_starter_defense before expanding production")
+    if recent_destroyed_count > 0:
+        recommendations.append("queue factory repair/rebuild for destroyed entities")
+    if spawner_count > 0 and max_spawner_pollution > 0:
+        recommendations.append("pollution is reaching enemy spawners; plan turret/wall coverage and reduce undefended expansion")
+    if danger_level in {"critical", "high", "medium"}:
+        recommendations.append("route walking and future rails/belts around enemy threat radii")
+    return recommendations
 
 
 def _layout_modification_notes(layout: dict[str, Any]) -> list[str]:
@@ -1000,6 +1114,35 @@ def _entities(observation: dict[str, Any]) -> list[dict[str, Any]]:
     if not isinstance(entities, list):
         return []
     return [item for item in entities if isinstance(item, dict)]
+
+
+def _enemies(observation: dict[str, Any]) -> list[dict[str, Any]]:
+    enemies = observation.get("enemies")
+    if not isinstance(enemies, list):
+        return []
+    return [item for item in enemies if isinstance(item, dict)]
+
+
+def _nearest_enemy(enemies: list[dict[str, Any]]) -> dict[str, Any] | None:
+    if not enemies:
+        return None
+    return min(enemies, key=lambda item: _enemy_distance(item) or 999999.0)
+
+
+def _enemy_distance(enemy: dict[str, Any] | None) -> float | None:
+    if not enemy:
+        return None
+    value = enemy.get("distance")
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
+def _safe_float(value: Any) -> float:
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _nearest_resource(observation: dict[str, Any], position: dict[str, float]) -> dict[str, Any] | None:

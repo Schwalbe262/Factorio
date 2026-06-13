@@ -6,8 +6,10 @@ from factorio_ai.monitor import (
     estimate_logistics_links,
     estimate_net_rates,
     estimate_production,
+    estimate_threats,
     estimate_throughput_constraints,
     production_target_status,
+    recent_damage_events,
     recent_factory_events,
     recipe_machine_ratio,
     summarize_factory,
@@ -300,6 +302,51 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(events[0]["actor"], "r1jae")
         self.assertEqual(events[0]["action"], "built")
         self.assertEqual(events[0]["entity"], "assembling-machine-1")
+
+    def test_recent_damage_events_include_enemy_cause(self):
+        events = recent_damage_events(
+            {
+                "factory_events": [
+                    {
+                        "tick": 220,
+                        "action": "destroyed",
+                        "actor": {"kind": "script", "name": "script"},
+                        "entity": "transport-belt",
+                        "cause": "small-biter",
+                        "cause_force": "enemy",
+                        "damage": 8,
+                        "health": 0,
+                        "position": {"x": 12, "y": 8},
+                    },
+                    {"tick": 200, "action": "built", "entity": "stone-furnace"},
+                ]
+            }
+        )
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["action"], "destroyed")
+        self.assertEqual(events[0]["cause"], "small-biter")
+
+    def test_threat_summary_recommends_defense_after_enemy_damage(self):
+        threats = estimate_threats(
+            {
+                "entities": [],
+                "enemies": [
+                    {"name": "biter-spawner", "type": "unit-spawner", "distance": 120, "pollution": 15.5},
+                ],
+                "factory_events": [
+                    {
+                        "tick": 300,
+                        "action": "damaged",
+                        "entity": "stone-furnace",
+                        "cause": "small-biter",
+                        "cause_force": "enemy",
+                    }
+                ],
+            }
+        )
+        self.assertEqual(threats.danger_level, "high")
+        self.assertEqual(threats.recent_damage_count, 1)
+        self.assertIn("run build_starter_defense", " ".join(threats.recommended_actions))
 
 
 if __name__ == "__main__":

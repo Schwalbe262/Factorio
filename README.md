@@ -111,13 +111,13 @@ strategic steps. `run_factorio_gui.bat` opens the configured save for visual ins
 `run_factorio_review_gui.bat` is for interruptible manual inspection: it connects a GUI client to the
 current AI server, creates `runtime\review.lock` while the GUI is open, and the non-GUI loop waits on
 that lock before continuing. Close the Factorio window when inspection is done.
-`run_factorio_watch_gui.bat` connects a GUI client without creating that lock, so the AI keeps running
-while you watch. Manual movement can be overridden by the AI in watch mode.
+`run_factorio_watch_gui.bat` is currently deferred. It is a development-only mod/RCON watch client,
+not public LAN multiplayer and not achievement-compatible. It only runs when
+`FACTORIO_AI_ALLOW_MODDED_WATCH=1` is set intentionally.
 
-The development server is launched as multiplayer (`--start-server` plus GUI `--mp-connect`) and now
-allows multiple players. This is still the mod/RCON development track: other clients must match the
-server's mod set. The final achievement-compatible multiplayer track must be vanilla and use only
-ordinary keyboard/mouse input.
+The development server is still launched internally with `--start-server` plus GUI `--mp-connect`,
+but it is configured for one local review client by default. General multiplayer is on hold until the
+vanilla executor can control a normal game with ordinary keyboard/mouse input and no mod dependency.
 
 In another terminal, run the iron plate MVP loop:
 
@@ -302,6 +302,15 @@ The observation API reports hostile `unit`, `unit-spawner`, and `turret` entitie
 The strategic payload summarizes nearest enemy distance, spawner/turret presence, type/name counts,
 and a danger level. Close hostile pressure selects `build_starter_defense` before blindly expanding
 production toward nests.
+
+The development mod also records enemy-caused `damaged` and `destroyed` factory events. The monitor
+shows threat context, recent damage, armed turret count, and whether pollution has reached observed
+spawners. That gives the planner enough evidence to pause expansion, rebuild broken sites, and queue
+defensive work.
+
+The current movement executor does not yet route around nests. The next vanilla-compatible movement
+layer must treat enemy bases and polluted spawners as high-cost zones and move through safe waypoints
+instead of sending a single direct `move_to` target.
 
 ## Build Item Mall
 

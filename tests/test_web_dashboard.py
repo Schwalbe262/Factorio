@@ -75,6 +75,28 @@ class WebDashboardTests(unittest.TestCase):
                             "position": {"x": 4, "y": 5},
                         }
                     ],
+                    "damage_events": [
+                        {
+                            "tick": 12,
+                            "action": "damaged",
+                            "entity": "stone-furnace",
+                            "cause": "small-biter",
+                            "damage": 5,
+                            "health": 45,
+                            "position": {"x": 6, "y": 7},
+                        }
+                    ],
+                    "threats": {
+                        "danger_level": "high",
+                        "enemy_count": 1,
+                        "nearest_enemy": {"name": "small-biter", "type": "unit", "distance": 20},
+                        "nearest_spawner": None,
+                        "armed_gun_turret_count": 0,
+                        "unarmed_gun_turret_count": 0,
+                        "recent_damage_count": 1,
+                        "max_spawner_pollution": 0,
+                        "recommended_actions": ["run build_starter_defense before expanding production"],
+                    },
                 },
                 "strategy": {"selected_skill": "produce_iron_plate", "priority": 95, "skill_status": {"implemented": True}},
             },
@@ -87,6 +109,10 @@ class WebDashboardTests(unittest.TestCase):
         self.assertIn("smelting:9,0", html)
         self.assertIn("copper-cable assembler ratio", html)
         self.assertIn("r1jae", html)
+        self.assertIn("Threats / Defense", html)
+        self.assertIn("small-biter", html)
+        self.assertIn("Recent Damage", html)
+        self.assertIn("stone-furnace", html)
 
     def test_dashboard_urls_use_lan_hosts_for_wildcard_bind(self):
         urls = dashboard_urls("0.0.0.0", 18889, "/factorio", base_url="http://10.0.0.5:18889")

@@ -33,7 +33,7 @@ def main(argv: list[str] | None = None) -> None:
 
     review_gui_parser = subparsers.add_parser(
         "review-gui",
-        help="Open a GUI client for manual inspection, starting the local server if needed",
+        help="Open a development mod/RCON GUI client for manual inspection",
     )
     review_gui_parser.add_argument("--window-size", default="1600x900")
     review_gui_parser.add_argument("--confirm-timeout", type=float, default=20.0)
@@ -41,7 +41,7 @@ def main(argv: list[str] | None = None) -> None:
 
     watch_gui_parser = subparsers.add_parser(
         "watch-gui",
-        help="Open a GUI client for watching while the AI keeps running",
+        help="Open a development-only mod/RCON GUI client while the AI keeps running",
     )
     watch_gui_parser.add_argument("--window-size", default="1600x900")
     watch_gui_parser.add_argument("--confirm-timeout", type=float, default=20.0)
@@ -221,6 +221,11 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     if args.command == "watch-gui":
+        if os.getenv("FACTORIO_AI_ALLOW_MODDED_WATCH") != "1":
+            raise SystemExit(
+                "watch-gui is a deferred development mod/RCON watch mode. "
+                "Set FACTORIO_AI_ALLOW_MODDED_WATCH=1 only for local development."
+            )
         server_started = False
         try:
             wait_for_rcon(cfg, timeout_seconds=3)

@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from .knowledge import dependency_tree_for_objective
-from .monitor import summarize_factory
+from .monitor import recent_damage_events, summarize_factory
 from .models import entities_named, entity_item_count, inventory_count, total_item_count
 
 
@@ -384,6 +384,8 @@ def make_threat_context(observation: dict[str, Any]) -> dict[str, Any]:
         counts_by_name[enemy_name] = counts_by_name.get(enemy_name, 0) + 1
     nearest_distance = _enemy_distance(nearest)
     armed_gun_turret_count = _armed_gun_turret_count(observation)
+    damage_events = recent_damage_events(observation, limit=10)
+    recent_destroyed_count = sum(1 for item in damage_events if item.get("action") == "destroyed")
     return {
         "enemy_count": len(enemy_rows),
         "counts_by_type": dict(sorted(counts_by_type.items())),
@@ -392,10 +394,13 @@ def make_threat_context(observation: dict[str, Any]) -> dict[str, Any]:
         "nearest_spawner": nearest_spawner,
         "nearest_turret": nearest_turret,
         "armed_gun_turret_count": armed_gun_turret_count,
-        "danger_level": _danger_level(nearest_distance),
+        "recent_enemy_damage_count": len(damage_events),
+        "recent_destroyed_count": recent_destroyed_count,
+        "danger_level": _danger_level(nearest_distance, damage_events),
         "constraints": [
             "avoid expanding toward enemy nests without a defense plan",
             "prioritize defense when hostile units are close to the factory or player",
+            "repair or rebuild damaged factory sites before treating old throughput estimates as reliable",
             "reserve space for turret lines, walls, ammo belts, and radar coverage",
         ],
     }
@@ -444,6 +449,7 @@ def heuristic_strategy(
                 f"danger_level={threats['danger_level']}",
                 f"nearest_enemy={nearest.get('name')}",
                 f"nearest_enemy_distance={nearest.get('distance')}",
+                f"recent_enemy_damage_count={threats.get('recent_enemy_damage_count')}",
             ],
             blockers=["enemy threat"],
             expected_effect="Pause expansion and build or plan starter defenses before continuing production growth.",
@@ -702,7 +708,12 @@ def _enemy_distance(enemy: dict[str, Any] | None) -> float | None:
         return None
 
 
-def _danger_level(nearest_distance: float | None) -> str:
+def _danger_level(nearest_distance: float | None, damage_events: list[dict[str, Any]] | None = None) -> str:
+    damage_events = damage_events or []
+    if any(item.get("action") == "destroyed" for item in damage_events):
+        return "critical"
+    if damage_events:
+        return "high"
     if nearest_distance is None:
         return "none"
     if nearest_distance <= 32:

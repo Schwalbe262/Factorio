@@ -40,6 +40,8 @@ TEXT: dict[str, dict[str, str]] = {
         "estimated_production": "Estimated Production",
         "factory_sites": "Factory Sites",
         "logistics_links": "Logistics Links",
+        "threats": "Threats / Defense",
+        "recent_damage": "Recent Damage",
         "bottlenecks": "Target Deficits / Bottlenecks",
         "inventory": "Inventory / Machine Contents",
         "technology_chain": "Technology Chain",
@@ -71,6 +73,8 @@ TEXT: dict[str, dict[str, str]] = {
         "no_production": "No active producers inferred yet.",
         "no_sites": "No factory sites inferred yet.",
         "no_links": "No logistics links inferred yet.",
+        "no_threats": "No hostile threat context observed yet.",
+        "no_recent_damage": "No enemy damage to the factory observed yet.",
         "no_bottleneck": "No bottleneck inferred for the current objective.",
         "no_inventory": "No tracked inventory yet.",
         "no_tech": "No technology requirement inferred for this objective yet.",
@@ -83,6 +87,17 @@ TEXT: dict[str, dict[str, str]] = {
         "executor_missing": "Executor missing. Codex must implement this skill before the AI can run it safely.",
         "executor": "Executor",
         "language": "Language",
+        "danger_level": "Danger Level",
+        "enemy_count": "Enemies",
+        "nearest_enemy": "Nearest Enemy",
+        "nearest_spawner": "Nearest Spawner",
+        "armed_turrets": "Armed Turrets",
+        "unarmed_turrets": "Unarmed Turrets",
+        "spawner_pollution": "Max Spawner Pollution",
+        "recommended_actions": "Recommended Actions",
+        "cause": "Cause",
+        "damage": "Damage",
+        "health": "Health",
     },
     "ko": {
         "title": "팩토리오 AI 공장 모니터",
@@ -136,6 +151,21 @@ TEXT["en"].update(
         "available": "Available",
         "actor": "Actor",
         "action": "Action",
+        "threats": "Threats / Defense",
+        "recent_damage": "Recent Damage",
+        "no_threats": "No hostile threat context observed yet.",
+        "no_recent_damage": "No enemy damage to the factory observed yet.",
+        "danger_level": "Danger Level",
+        "enemy_count": "Enemies",
+        "nearest_enemy": "Nearest Enemy",
+        "nearest_spawner": "Nearest Spawner",
+        "armed_turrets": "Armed Turrets",
+        "unarmed_turrets": "Unarmed Turrets",
+        "spawner_pollution": "Max Spawner Pollution",
+        "recommended_actions": "Recommended Actions",
+        "cause": "Cause",
+        "damage": "Damage",
+        "health": "Health",
     }
 )
 TEXT["ko"].update(
@@ -341,6 +371,8 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
     factory_sites = monitor.get("factory_sites") if isinstance(monitor.get("factory_sites"), list) else []
     logistics_links = monitor.get("logistics_links") if isinstance(monitor.get("logistics_links"), list) else []
     factory_events = monitor.get("factory_events") if isinstance(monitor.get("factory_events"), list) else []
+    damage_events = monitor.get("damage_events") if isinstance(monitor.get("damage_events"), list) else []
+    threats = monitor.get("threats") if isinstance(monitor.get("threats"), dict) else {}
     bottlenecks = monitor.get("bottlenecks") if isinstance(monitor.get("bottlenecks"), list) else []
     inventory = monitor.get("inventory") if isinstance(monitor.get("inventory"), dict) else {}
     technologies = monitor.get("technology_chain") if isinstance(monitor.get("technology_chain"), list) else []
@@ -375,6 +407,17 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
       {_list(_t(lang, "blockers"), strategy.get("blockers"))}
       {_skill_status(strategy.get("skill_status"), lang)}
       <p class="muted">{_target_satisfied_text(target_status, lang)}</p>
+    </section>
+
+    <section class="grid">
+      <div class="panel">
+        <h2>{_t(lang, "threats")}</h2>
+        {_threat_summary(threats, lang)}
+      </div>
+      <div class="panel">
+        <h2>{_t(lang, "recent_damage")}</h2>
+        {_damage_event_table(damage_events, lang)}
+      </div>
     </section>
 
     <section class="panel">
@@ -749,6 +792,64 @@ def _factory_event_table(rows: list[Any], lang: str) -> str:
     return (
         f"<table><thead><tr><th>{_t(lang, 'tick')}</th><th>{_t(lang, 'actor')}</th>"
         f"<th>{_t(lang, 'action')}</th><th>{_t(lang, 'item')}</th>"
+        f"<th>{_t(lang, 'position')}</th></tr></thead>"
+        f"<tbody>{body}</tbody></table>"
+    )
+
+
+def _threat_summary(threats: dict[str, Any], lang: str) -> str:
+    if not threats:
+        return f"<p class=\"muted\">{_t(lang, 'no_threats')}</p>"
+    recommended = threats.get("recommended_actions") if isinstance(threats.get("recommended_actions"), list) else []
+    rows = [
+        (_t(lang, "danger_level"), threats.get("danger_level")),
+        (_t(lang, "enemy_count"), threats.get("enemy_count")),
+        (_t(lang, "nearest_enemy"), _entity_summary(threats.get("nearest_enemy"))),
+        (_t(lang, "nearest_spawner"), _entity_summary(threats.get("nearest_spawner"))),
+        (_t(lang, "armed_turrets"), threats.get("armed_gun_turret_count")),
+        (_t(lang, "unarmed_turrets"), threats.get("unarmed_gun_turret_count")),
+        (_t(lang, "recent_damage"), threats.get("recent_damage_count")),
+        (_t(lang, "spawner_pollution"), threats.get("max_spawner_pollution")),
+        (_t(lang, "recommended_actions"), "; ".join(str(item) for item in recommended[:4])),
+    ]
+    body = "".join(
+        f"<tr><th>{escape(str(label))}</th><td>{escape(str(value or ''))}</td></tr>"
+        for label, value in rows
+    )
+    return f"<table><tbody>{body}</tbody></table>"
+
+
+def _entity_summary(value: Any) -> str:
+    if not isinstance(value, dict):
+        return ""
+    name = str(value.get("name") or "")
+    entity_type = str(value.get("type") or "")
+    distance = value.get("distance")
+    position = _position_text(value.get("position"))
+    parts = [item for item in [name, entity_type, f"{distance} tiles" if distance is not None else "", position] if item]
+    return " / ".join(parts)
+
+
+def _damage_event_table(rows: list[Any], lang: str) -> str:
+    if not rows:
+        return f"<p class=\"muted\">{_t(lang, 'no_recent_damage')}</p>"
+    body = "".join(
+        "<tr>"
+        f"<td>{escape(str(row.get('tick') or ''))}</td>"
+        f"<td>{escape(str(row.get('action') or ''))}</td>"
+        f"<td>{escape(str(row.get('entity') or ''))}</td>"
+        f"<td>{escape(str(row.get('cause') or row.get('cause_force') or ''))}</td>"
+        f"<td>{escape(str(row.get('damage') or ''))}</td>"
+        f"<td>{escape(str(row.get('health') or ''))}</td>"
+        f"<td>{escape(_position_text(row.get('position')))}</td>"
+        "</tr>"
+        for row in rows[:40]
+        if isinstance(row, dict)
+    )
+    return (
+        f"<table><thead><tr><th>{_t(lang, 'tick')}</th><th>{_t(lang, 'action')}</th>"
+        f"<th>{_t(lang, 'item')}</th><th>{_t(lang, 'cause')}</th>"
+        f"<th>{_t(lang, 'damage')}</th><th>{_t(lang, 'health')}</th>"
         f"<th>{_t(lang, 'position')}</th></tr></thead>"
         f"<tbody>{body}</tbody></table>"
     )

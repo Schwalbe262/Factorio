@@ -44,7 +44,7 @@ def write_server_settings(cfg: AppConfig) -> Path:
         "name": "Factorio AI Autoplayer",
         "description": "Local Factorio AI development server",
         "tags": ["ai", "local"],
-        "max_players": 8,
+        "max_players": 1,
         "visibility": {"public": False, "lan": False},
         "username": "",
         "token": "",

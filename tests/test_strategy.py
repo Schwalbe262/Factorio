@@ -189,6 +189,27 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(result["selected_skill"], "build_starter_defense")
         self.assertIn("enemy threat", result["blockers"])
 
+    def test_recent_enemy_damage_requests_defense_skill(self):
+        result = heuristic_strategy(
+            "launch_rocket_program",
+            {
+                "inventory": {"iron-plate": 100},
+                "entities": [],
+                "enemies": [],
+                "factory_events": [
+                    {
+                        "tick": 500,
+                        "action": "destroyed",
+                        "entity": "transport-belt",
+                        "cause": "small-biter",
+                        "cause_force": "enemy",
+                    }
+                ],
+            },
+        )
+        self.assertEqual(result["selected_skill"], "build_starter_defense")
+        self.assertIn("recent_enemy_damage_count=1", result["evidence"])
+
     def test_armed_starter_turret_prevents_repeated_defense_loop(self):
         result = heuristic_strategy(
             "launch_rocket_program",
