@@ -7,6 +7,7 @@ local LAB_SITE_RADIUS = 96
 local POLE_WIRE_REACH = 7.5
 local MOVE_STOP_DISTANCE = 0.35
 local PLAYER_MOVE_STEP = 0.10
+local MAX_FACTORY_EVENTS = 300
 
 local VIRTUAL_STARTER_ITEMS = {
   ["burner-mining-drill"] = 1,
@@ -530,6 +531,71 @@ local function entity_connected_to_electric_network(entity)
   return nil
 end
 
+local function entity_identity_key(entity)
+  if entity.unit_number then
+    return tostring(entity.unit_number)
+  end
+  return entity.name .. ":" .. tostring(entity.position.x) .. ":" .. tostring(entity.position.y)
+end
+
+local function actor_from_event(event)
+  if event and event.player_index then
+    local player = game.get_player(event.player_index)
+    if player then
+      return {
+        kind = "player",
+        name = player.name,
+        index = player.index
+      }
+    end
+  end
+  if event and event.robot and event.robot.valid then
+    return {
+      kind = "robot",
+      name = event.robot.name,
+      force = event.robot.force and event.robot.force.name or nil
+    }
+  end
+  return { kind = "script", name = "script" }
+end
+
+local function entity_modification_snapshot(entity)
+  if not entity or not entity.valid then
+    return nil
+  end
+  storage.entity_modifications = storage.entity_modifications or {}
+  return storage.entity_modifications[entity_identity_key(entity)]
+end
+
+local function push_factory_event(record)
+  storage.factory_events = storage.factory_events or {}
+  table.insert(storage.factory_events, 1, record)
+  while #storage.factory_events > MAX_FACTORY_EVENTS do
+    table.remove(storage.factory_events)
+  end
+end
+
+local function record_factory_event(action, event)
+  local entity = event and (event.entity or event.created_entity)
+  if not entity or not entity.valid then
+    return
+  end
+  local record = {
+    tick = event.tick or game.tick,
+    action = action,
+    actor = actor_from_event(event),
+    entity = entity.name,
+    unit_number = entity.unit_number,
+    type = entity.type,
+    force = entity.force and entity.force.name or nil,
+    surface = entity.surface and entity.surface.name or nil,
+    position = position_table(entity.position)
+  }
+  storage.entity_modifications = storage.entity_modifications or {}
+  storage.entity_modifications[entity_identity_key(entity)] = record
+  push_factory_event(record)
+end
+
 local function collect_resources(surface, position)
   local resources = {}
   local resource_names = { "iron-ore", "coal", "stone", "copper-ore", "uranium-ore", "crude-oil" }
@@ -571,19 +637,13 @@ local function entity_snapshot(entity, position)
     status = entity.status,
     recipe = entity_recipe_name(entity),
     electric_network_connected = entity_connected_to_electric_network(entity),
+    last_modified = entity_modification_snapshot(entity),
     drop_position = optional_entity_position(entity, "drop_position"),
     pickup_position = optional_entity_position(entity, "pickup_position"),
     distance = round(distance(position, entity.position)),
     inventories = entity_inventory_snapshot(entity),
     fluids = entity_fluidbox_snapshot(entity)
   }
-end
-
-local function entity_identity_key(entity)
-  if entity.unit_number then
-    return tostring(entity.unit_number)
-  end
-  return entity.name .. ":" .. tostring(entity.position.x) .. ":" .. tostring(entity.position.y)
 end
 
 local function add_unique_entity_snapshot(rows, seen, entity, position)
@@ -690,6 +750,25 @@ local function collect_enemies(surface, position, force)
     return a.distance < b.distance
   end)
   return enemies
+end
+
+local function collect_factory_events(position)
+  local output = {}
+  storage.factory_events = storage.factory_events or {}
+  for _, event in pairs(storage.factory_events) do
+    local row = {}
+    for key, value in pairs(event) do
+      row[key] = value
+    end
+    if event.position then
+      row.distance = round(distance(position, event.position))
+    end
+    table.insert(output, row)
+    if #output >= 80 then
+      break
+    end
+  end
+  return output
 end
 
 local function can_place_manual(surface, force, name, position, direction)
@@ -1194,6 +1273,7 @@ local function observe(command, options)
     resources = collect_resources(surface, position),
     entities = collect_entities(surface, position),
     enemies = collect_enemies(surface, position, agent.force),
+    factory_events = collect_factory_events(position),
     power_sites = collect_power_sites(surface, position, agent.force),
     lab_sites = collect_lab_sites(surface, position, agent.force),
     automation_sites = collect_automation_sites(surface, position, agent.force),
@@ -1312,6 +1392,27 @@ local function action_move_to(agent, action)
       distance = round(distance(agent.position, position))
     })
   end
+end
+
+local function action_stop(agent, action)
+  if agent.kind == "virtual" then
+    storage.ai_agent = storage.ai_agent or {}
+    storage.ai_agent.move_goal = nil
+    stop_character_command(storage.ai_agent.character)
+    return result_ok({
+      action = "stop",
+      status = "stopped",
+      position = position_table(agent.position)
+    })
+  end
+  storage.ai_player_move_goals = storage.ai_player_move_goals or {}
+  storage.ai_player_move_goals[tostring(agent.player.index)] = nil
+  set_character_walking(agent.player, false)
+  return result_ok({
+    action = "stop",
+    status = "stopped",
+    position = position_table(agent.position)
+  })
 end
 
 local function action_mine(agent, action)
@@ -1860,6 +1961,8 @@ local function execute_action(command, action)
   local agent = ensure_agent(command, action)
   if action_type == "move_to" then
     return action_move_to(agent, action)
+  elseif action_type == "stop" then
+    return action_stop(agent, action)
   elseif action_type == "mine" then
     return action_mine(agent, action)
   elseif action_type == "craft" then
@@ -1903,6 +2006,18 @@ end)
 script.on_event(defines.events.on_player_joined_game, function(event)
   local player = game.get_player(event.player_index)
   focus_player_on_agent(player)
+end)
+
+script.on_event(defines.events.on_built_entity, function(event)
+  record_factory_event("built", event)
+end)
+
+script.on_event(defines.events.on_robot_built_entity, function(event)
+  record_factory_event("robot_built", event)
+end)
+
+script.on_event(defines.events.on_player_mined_entity, function(event)
+  record_factory_event("mined", event)
 end)
 
 commands.add_command("ai_observe", "Return Factorio AI observation JSON.", function(command)

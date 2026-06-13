@@ -16,6 +16,11 @@ echo [factorio-ai] Waiting for RCON...
 timeout /t 12 /nobreak >nul
 
 :strategy_loop
+if exist runtime\review.lock (
+  echo [factorio-ai] GUI review is active. Waiting until runtime\review.lock is removed...
+  timeout /t 2 /nobreak >nul
+  goto strategy_loop
+)
 echo [factorio-ai] Running one strategic step...
 python -m factorio_ai.cli run-strategy-step --objective launch_rocket_program
 if errorlevel 1 (

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -81,6 +82,18 @@ class LogisticsLinkEstimate:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class ThroughputConstraint:
+    item: str
+    required_per_minute: float
+    available_per_minute: float
+    bottleneck: str
+    notes: list[str]
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
 COMMON_ITEMS = [
     "iron-ore",
     "copper-ore",
@@ -127,6 +140,17 @@ ASSEMBLER_SPEEDS = {
     "assembling-machine-2": 0.75,
     "assembling-machine-3": 1.25,
 }
+BELT_ITEMS_PER_SECOND = {
+    "transport-belt": 15.0,
+    "fast-transport-belt": 30.0,
+    "express-transport-belt": 45.0,
+}
+INSERTER_ITEMS_PER_SECOND = {
+    "burner-inserter": 0.6,
+    "inserter": 0.83,
+    "fast-inserter": 2.31,
+    "stack-inserter": 4.62,
+}
 NORTH = 0
 EAST = 4
 SOUTH = 8
@@ -148,6 +172,8 @@ def summarize_factory(
     technologies = technology_requirements_for_objective(objective)
     factory_sites = estimate_factory_sites(observation)
     logistics_links = estimate_logistics_links(observation)
+    factory_events = recent_factory_events(observation)
+    throughput_constraints = estimate_throughput_constraints(observation)
     return {
         "objective": objective,
         "inventory": inventory,
@@ -161,6 +187,8 @@ def summarize_factory(
         "technology_chain": technologies,
         "factory_sites": [item.to_dict() for item in factory_sites],
         "logistics_links": [item.to_dict() for item in logistics_links],
+        "factory_events": factory_events,
+        "throughput_constraints": [item.to_dict() for item in throughput_constraints],
     }
 
 
@@ -221,6 +249,110 @@ def estimate_consumption(observation: dict[str, Any]) -> list[ConsumptionEstimat
                 ),
             )
     return sorted(rates.values(), key=lambda item: (-item.per_minute, item.item))
+
+
+def machine_output_per_minute(recipe_name: str, machine_name: str, product: str | None = None) -> float:
+    recipe = RECIPES.get(recipe_name)
+    speed = ASSEMBLER_SPEEDS.get(machine_name) or FURNACE_SPEEDS.get(machine_name)
+    if recipe is None or speed is None:
+        return 0.0
+    product_name = product or recipe_name
+    count = float(recipe.products.get(product_name) or 0.0)
+    if count <= 0:
+        return 0.0
+    return round(60.0 * speed * count / max(recipe.time_seconds, 0.001), 3)
+
+
+def recipe_machine_ratio(
+    producer_recipe: str,
+    consumer_recipe: str,
+    item: str,
+    machine_name: str = "assembling-machine-1",
+) -> dict[str, float]:
+    producer_rate = machine_output_per_minute(producer_recipe, machine_name, item)
+    consumer_recipe_data = RECIPES.get(consumer_recipe)
+    consumer_speed = ASSEMBLER_SPEEDS.get(machine_name)
+    if producer_rate <= 0 or consumer_recipe_data is None or consumer_speed is None:
+        return {"producer": 0.0, "consumer": 0.0}
+    ingredient_count = float(consumer_recipe_data.ingredients.get(item) or 0.0)
+    crafts_per_minute = 60.0 * consumer_speed / max(consumer_recipe_data.time_seconds, 0.001)
+    consumer_rate = crafts_per_minute * ingredient_count
+    # Minimal whole-machine ratio after scaling by each side's per-machine flow.
+    producer_units = consumer_rate
+    consumer_units = producer_rate
+    if producer_units <= 0 or consumer_units <= 0:
+        return {"producer": 0.0, "consumer": 0.0}
+    scale = _gcd_float(producer_units, consumer_units)
+    return {
+        "producer": round(producer_units / scale, 3),
+        "consumer": round(consumer_units / scale, 3),
+        "producer_per_minute": round(producer_rate, 3),
+        "consumer_demand_per_minute": round(consumer_rate, 3),
+    }
+
+
+def estimate_throughput_constraints(observation: dict[str, Any]) -> list[ThroughputConstraint]:
+    constraints: list[ThroughputConstraint] = []
+    cable_assemblers = [
+        item
+        for item in _entities(observation)
+        if item.get("name") in ASSEMBLER_SPEEDS
+        and item.get("recipe") == "copper-cable"
+        and item.get("electric_network_connected") is not False
+    ]
+    circuit_assemblers = [
+        item
+        for item in _entities(observation)
+        if item.get("name") in ASSEMBLER_SPEEDS
+        and item.get("recipe") == "electronic-circuit"
+        and item.get("electric_network_connected") is not False
+    ]
+    if cable_assemblers or circuit_assemblers:
+        cable_output = sum(machine_output_per_minute("copper-cable", str(item.get("name") or ""), "copper-cable") for item in cable_assemblers)
+        cable_required = 0.0
+        for item in circuit_assemblers:
+            speed = ASSEMBLER_SPEEDS.get(str(item.get("name") or "")) or 0.0
+            recipe = RECIPES["electronic-circuit"]
+            cable_required += 60.0 * speed * float(recipe.ingredients["copper-cable"]) / recipe.time_seconds
+        ratio = recipe_machine_ratio("copper-cable", "electronic-circuit", "copper-cable")
+        bottleneck = "ok" if cable_output >= cable_required else "copper-cable assembler ratio"
+        constraints.append(
+            ThroughputConstraint(
+                item="copper-cable",
+                required_per_minute=round(cable_required, 3),
+                available_per_minute=round(cable_output, 3),
+                bottleneck=bottleneck,
+                notes=[
+                    "electronic-circuit balance from recipe time and assembler speed",
+                    f"assembling-machine-1 copper-cable:electronic-circuit ratio is {ratio['producer']:.0f}:{ratio['consumer']:.0f}",
+                ],
+            )
+        )
+
+    belt_counts = Counter(str(entity.get("name") or "") for entity in _entities(observation) if entity.get("name") in BELT_ITEMS_PER_SECOND)
+    for belt_name, count in sorted(belt_counts.items()):
+        constraints.append(
+            ThroughputConstraint(
+                item=belt_name,
+                required_per_minute=0.0,
+                available_per_minute=round(BELT_ITEMS_PER_SECOND[belt_name] * 60.0 * count, 3),
+                bottleneck="belt capacity tracked",
+                notes=[f"{belt_name} carries {BELT_ITEMS_PER_SECOND[belt_name]} items/s per lane pair before split/side limits"],
+            )
+        )
+
+    inserter_counts = Counter(str(entity.get("name") or "") for entity in _entities(observation) if entity.get("name") in INSERTER_ITEMS_PER_SECOND)
+    for inserter_name, count in sorted(inserter_counts.items()):
+        constraints.append(
+            ThroughputConstraint(
+                item=inserter_name,
+                required_per_minute=0.0,
+                available_per_minute=round(INSERTER_ITEMS_PER_SECOND[inserter_name] * 60.0 * count, 3),
+                bottleneck="inserter transfer tracked",
+                notes=[f"{inserter_name} rough transfer estimate is {INSERTER_ITEMS_PER_SECOND[inserter_name]} items/s before stack bonuses"],
+            )
+        )
+    return constraints
 
 
 def estimate_net_rates(
@@ -337,7 +469,8 @@ def estimate_factory_sites(observation: dict[str, Any]) -> list[FactorySiteEstim
                 "boiler fuel should be upgraded from manual coal inserts to belt/inserter feed"
                 if fuel_link == "manual"
                 else "coal feed belt/inserter observed near boiler"
-            ],
+            ]
+            + _entity_modification_notes(boiler),
         )
         sites.append(site)
         seen_site_ids.add(site.site_id)
@@ -360,7 +493,8 @@ def estimate_factory_sites(observation: dict[str, Any]) -> list[FactorySiteEstim
             notes=[
                 "burner mining drill is an early bootstrap layout; replace with electric mining drills after power",
                 f"{resource_name} is moved by a short belt/inserter chain into a furnace",
-            ],
+            ]
+            + _layout_modification_notes(layout),
         )
         if site.site_id not in seen_site_ids:
             sites.append(site)
@@ -387,7 +521,7 @@ def estimate_factory_sites(observation: dict[str, Any]) -> list[FactorySiteEstim
             item=str(recipe) if isinstance(recipe, str) and recipe else None,
             machines=[str(assembler.get("name") or "assembling-machine")],
             automation_level=automation_level,
-            notes=[f"assembler recipe: {recipe or 'unset'}"],
+            notes=[f"assembler recipe: {recipe or 'unset'}"] + _entity_modification_notes(assembler),
         )
         sites.append(site)
 
@@ -412,11 +546,172 @@ def estimate_factory_sites(observation: dict[str, Any]) -> list[FactorySiteEstim
                 "electric mining drill is the preferred post-power mining layer"
                 if electric
                 else "burner mining drill should be replaced by electric mining drill after power and green circuits stabilize"
-            ],
+            ]
+            + _entity_modification_notes(drill),
         )
         sites.append(site)
 
-    return sites
+    return _group_factory_sites(sites)
+
+
+def recent_factory_events(observation: dict[str, Any], limit: int = 40) -> list[dict[str, Any]]:
+    raw = observation.get("factory_events")
+    if not isinstance(raw, list):
+        return []
+    output: list[dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        actor = item.get("actor") if isinstance(item.get("actor"), dict) else {}
+        output.append(
+            {
+                "tick": item.get("tick"),
+                "action": item.get("action"),
+                "actor": actor.get("name") or actor.get("kind"),
+                "actor_kind": actor.get("kind"),
+                "entity": item.get("entity"),
+                "unit_number": item.get("unit_number"),
+                "position": item.get("position") if isinstance(item.get("position"), dict) else {},
+                "distance": item.get("distance"),
+            }
+        )
+        if len(output) >= limit:
+            break
+    return output
+
+
+def _layout_modification_notes(layout: dict[str, Any]) -> list[str]:
+    notes: list[str] = []
+    for key in ("drill", "belt1", "belt2", "inserter", "furnace"):
+        entity = layout.get(key)
+        if isinstance(entity, dict):
+            notes.extend(_entity_modification_notes(entity))
+    return sorted(set(notes))
+
+
+def _entity_modification_notes(*entities: dict[str, Any]) -> list[str]:
+    notes: list[str] = []
+    for entity in entities:
+        modified = entity.get("last_modified") if isinstance(entity.get("last_modified"), dict) else None
+        if not modified:
+            continue
+        actor = modified.get("actor") if isinstance(modified.get("actor"), dict) else {}
+        actor_name = actor.get("name") or actor.get("kind") or "unknown"
+        action = modified.get("action") or "modified"
+        tick = modified.get("tick")
+        notes.append(f"last {action} by {actor_name} at tick {tick}")
+    return notes
+
+
+def _group_factory_sites(sites: list[FactorySiteEstimate]) -> list[FactorySiteEstimate]:
+    grouped_inputs: dict[tuple[str, str | None, str], list[FactorySiteEstimate]] = {}
+    for site in sites:
+        grouped_inputs.setdefault(_factory_site_group_key(site), []).append(site)
+
+    output: list[FactorySiteEstimate] = []
+    for candidates in grouped_inputs.values():
+        visited: set[int] = set()
+        for start_index in range(len(candidates)):
+            if start_index in visited:
+                continue
+            stack = [start_index]
+            cluster: list[FactorySiteEstimate] = []
+            visited.add(start_index)
+            while stack:
+                index = stack.pop()
+                site = candidates[index]
+                cluster.append(site)
+                for other_index, other in enumerate(candidates):
+                    if other_index in visited:
+                        continue
+                    if _factory_sites_are_adjacent(site, other):
+                        visited.add(other_index)
+                        stack.append(other_index)
+            output.append(_merge_factory_site_cluster(cluster))
+
+    return sorted(output, key=lambda item: (item.kind, item.item or "", item.position["x"], item.position["y"]))
+
+
+def _factory_site_group_key(site: FactorySiteEstimate) -> tuple[str, str | None, str]:
+    item = site.item
+    if site.kind in {"assembler_cell", "build_item_mall", "circuit_automation"}:
+        item = None
+    return (site.kind, item, site.automation_level)
+
+
+def _factory_sites_are_adjacent(left: FactorySiteEstimate, right: FactorySiteEstimate) -> bool:
+    threshold = max(_factory_site_group_radius(left), _factory_site_group_radius(right))
+    return distance(left.position, right.position) <= threshold
+
+
+def _factory_site_group_radius(site: FactorySiteEstimate) -> float:
+    if site.kind in {"mining_patch", "plate_smelting_line"}:
+        return 36.0
+    if site.kind in {"assembler_cell", "build_item_mall", "circuit_automation"}:
+        return 14.0
+    if site.kind == "steam_power":
+        return 18.0
+    return 16.0
+
+
+def _merge_factory_site_cluster(cluster: list[FactorySiteEstimate]) -> FactorySiteEstimate:
+    if not cluster:
+        raise ValueError("cannot merge an empty factory site cluster")
+    if len(cluster) == 1:
+        return cluster[0]
+
+    position = _centroid([site.position for site in cluster])
+    items = sorted({item for site in cluster if (item := site.item)})
+    automation_levels = Counter(site.automation_level for site in cluster)
+    notes = sorted({note for site in cluster for note in site.notes})
+    notes.insert(0, f"grouped {len(cluster)} adjacent site records")
+    return FactorySiteEstimate(
+        site_id=_position_site_id(f"{cluster[0].kind}:group:{items[0] if len(items) == 1 else 'mixed'}", position),
+        kind=cluster[0].kind,
+        status=_summarize_site_values(site.status for site in cluster),
+        position=position,
+        item=items[0] if len(items) == 1 else None,
+        machines=_summarize_machine_counts(cluster),
+        automation_level=automation_levels.most_common(1)[0][0] if len(automation_levels) == 1 else _summarize_site_values(automation_levels.elements()),
+        notes=notes,
+    )
+
+
+def _centroid(positions: list[dict[str, float]]) -> dict[str, float]:
+    if not positions:
+        return {"x": 0.0, "y": 0.0}
+    return {
+        "x": round(sum(float(item.get("x") or 0.0) for item in positions) / len(positions), 2),
+        "y": round(sum(float(item.get("y") or 0.0) for item in positions) / len(positions), 2),
+    }
+
+
+def _summarize_machine_counts(cluster: list[FactorySiteEstimate]) -> list[str]:
+    counts = Counter(machine for site in cluster for machine in site.machines if machine)
+    return [
+        name if count == 1 else f"{name} x{count}"
+        for name, count in sorted(counts.items())
+    ]
+
+
+def _summarize_site_values(values: Any) -> str:
+    counts = Counter(str(value) for value in values if str(value))
+    if not counts:
+        return ""
+    if len(counts) == 1:
+        return next(iter(counts))
+    return ", ".join(
+        value if count == 1 else f"{value} x{count}"
+        for value, count in sorted(counts.items())
+    )
+
+
+def _gcd_float(left: float, right: float) -> float:
+    a = max(1, int(round(left * 1000)))
+    b = max(1, int(round(right * 1000)))
+    while b:
+        a, b = b, a % b
+    return max(a / 1000.0, 0.001)
 
 
 def estimate_logistics_links(observation: dict[str, Any]) -> list[LogisticsLinkEstimate]:

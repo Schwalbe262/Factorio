@@ -14,6 +14,7 @@ ALLOWED_ACTION_TYPES = {
     "set_recipe",
     "connect_power",
     "research",
+    "stop",
     "wait",
 }
 
@@ -61,6 +62,8 @@ def validate_action(action: dict[str, Any]) -> dict[str, Any]:
             raise ActionValidationError("connect_power requires position or unit_number")
     elif action_type == "research":
         _require_string(action, "technology")
+    elif action_type == "stop":
+        pass
     elif action_type == "wait":
         ticks = int(action.get("ticks", 60))
         if ticks < 1 or ticks > 36000:

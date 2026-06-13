@@ -31,6 +31,22 @@ def main(argv: list[str] | None = None) -> None:
     launch_gui_parser.add_argument("--window-size", default="1600x900")
     launch_gui_parser.add_argument("--no-connect", action="store_true")
 
+    review_gui_parser = subparsers.add_parser(
+        "review-gui",
+        help="Open a GUI client for manual inspection, starting the local server if needed",
+    )
+    review_gui_parser.add_argument("--window-size", default="1600x900")
+    review_gui_parser.add_argument("--confirm-timeout", type=float, default=20.0)
+    review_gui_parser.add_argument("--no-wait", action="store_true", help="Do not wait for the GUI process to close")
+
+    watch_gui_parser = subparsers.add_parser(
+        "watch-gui",
+        help="Open a GUI client for watching while the AI keeps running",
+    )
+    watch_gui_parser.add_argument("--window-size", default="1600x900")
+    watch_gui_parser.add_argument("--confirm-timeout", type=float, default=20.0)
+    watch_gui_parser.add_argument("--no-wait", action="store_true", help="Do not wait for the GUI process to close")
+
     launch_save_gui_parser = subparsers.add_parser("launch-save-gui", help="Launch GUI Factorio and load the configured save")
     launch_save_gui_parser.add_argument("--window-size", default="1600x900")
 
@@ -170,6 +186,61 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "launch-gui":
         proc = start_gui_client(cfg, window_size=args.window_size, connect=not args.no_connect)
         print_json({"ok": True, "pid": proc.pid})
+        return
+
+    if args.command == "review-gui":
+        server_started = False
+        try:
+            wait_for_rcon(cfg, timeout_seconds=3)
+        except Exception:
+            create_save(cfg)
+            server_proc = start_server(cfg)
+            server_started = True
+            wait_for_rcon(cfg)
+            print_json({"ok": True, "serverStarted": True, "serverPid": server_proc.pid})
+
+        stop_response = FactorioController(cfg).stop_agent()
+        proc = start_gui_client(cfg, window_size=args.window_size, connect=True, ensure_mod=False)
+        clicked = False
+        try:
+            clicked = VanillaGuiDriver(cfg).click_steam_continue_prompt(timeout_seconds=args.confirm_timeout)
+        except Exception:
+            clicked = False
+        print_json(
+            {
+                "ok": True,
+                "pid": proc.pid,
+                "serverStarted": server_started,
+                "steamPromptClicked": clicked,
+                "agentStopped": stop_response,
+            }
+        )
+        if not args.no_wait:
+            proc.wait()
+            print_json({"ok": True, "guiClosed": True, "exitCode": proc.returncode})
+        return
+
+    if args.command == "watch-gui":
+        server_started = False
+        try:
+            wait_for_rcon(cfg, timeout_seconds=3)
+        except Exception:
+            create_save(cfg)
+            server_proc = start_server(cfg)
+            server_started = True
+            wait_for_rcon(cfg)
+            print_json({"ok": True, "serverStarted": True, "serverPid": server_proc.pid})
+
+        proc = start_gui_client(cfg, window_size=args.window_size, connect=True, ensure_mod=False)
+        clicked = False
+        try:
+            clicked = VanillaGuiDriver(cfg).click_steam_continue_prompt(timeout_seconds=args.confirm_timeout)
+        except Exception:
+            clicked = False
+        print_json({"ok": True, "pid": proc.pid, "serverStarted": server_started, "steamPromptClicked": clicked, "mode": "watch"})
+        if not args.no_wait:
+            proc.wait()
+            print_json({"ok": True, "guiClosed": True, "exitCode": proc.returncode})
         return
 
     if args.command == "launch-save-gui":

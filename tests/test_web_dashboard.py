@@ -22,7 +22,7 @@ class WebDashboardTests(unittest.TestCase):
         self.assertEqual(request_language("/팩토리오", {}), "ko")
         self.assertEqual(dashboard_path("ko"), "/factorio?lang=ko")
 
-    def test_dashboard_html_has_language_toggle_and_item_icons(self):
+    def test_dashboard_html_has_monitor_sections_and_item_icons(self):
         html = render_dashboard(
             {
                 "ok": True,
@@ -32,6 +32,15 @@ class WebDashboardTests(unittest.TestCase):
                 "targets": {"per_minute": {"iron-plate": 30.0}},
                 "monitor": {
                     "production": [{"item": "iron-plate", "per_minute": 30.0, "producers": 1, "confidence": 0.5}],
+                    "throughput_constraints": [
+                        {
+                            "item": "copper-cable",
+                            "required_per_minute": 180.0,
+                            "available_per_minute": 120.0,
+                            "bottleneck": "copper-cable assembler ratio",
+                            "notes": ["assembling-machine-1 copper-cable:electronic-circuit ratio is 3:2"],
+                        }
+                    ],
                     "bottlenecks": [],
                     "inventory": {"iron-plate": 3},
                     "technology_chain": [],
@@ -57,6 +66,15 @@ class WebDashboardTests(unittest.TestCase):
                             "length_tiles": 5,
                         }
                     ],
+                    "factory_events": [
+                        {
+                            "tick": 10,
+                            "actor": "r1jae",
+                            "action": "built",
+                            "entity": "assembling-machine-1",
+                            "position": {"x": 4, "y": 5},
+                        }
+                    ],
                 },
                 "strategy": {"selected_skill": "produce_iron_plate", "priority": 95, "skill_status": {"implemented": True}},
             },
@@ -64,10 +82,11 @@ class WebDashboardTests(unittest.TestCase):
         )
         self.assertIn('href="/factorio?objective=launch_rocket_program"', html)
         self.assertIn('href="/factorio?lang=ko&amp;objective=launch_rocket_program"', html)
-        self.assertIn('/factorio/icon/iron-plate.png', html)
+        self.assertIn("/factorio/icon/iron-plate.png", html)
         self.assertIn("build_item_mall", html)
         self.assertIn("smelting:9,0", html)
-        self.assertIn("팩토리오 AI 공장 모니터", html)
+        self.assertIn("copper-cable assembler ratio", html)
+        self.assertIn("r1jae", html)
 
     def test_dashboard_urls_use_lan_hosts_for_wildcard_bind(self):
         urls = dashboard_urls("0.0.0.0", 18889, "/factorio", base_url="http://10.0.0.5:18889")

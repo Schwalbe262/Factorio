@@ -126,6 +126,31 @@ TEXT: dict[str, dict[str, str]] = {
     },
 }
 
+TEXT["en"].update(
+    {
+        "factory_events": "Recent Factory Edits",
+        "no_factory_events": "No player or robot factory edits observed yet.",
+        "throughput_constraints": "Throughput Constraints",
+        "no_throughput_constraints": "No throughput constraints inferred yet.",
+        "required": "Required",
+        "available": "Available",
+        "actor": "Actor",
+        "action": "Action",
+    }
+)
+TEXT["ko"].update(
+    {
+        "factory_events": "Recent Factory Edits",
+        "no_factory_events": "No player or robot factory edits observed yet.",
+        "throughput_constraints": "Throughput Constraints",
+        "no_throughput_constraints": "No throughput constraints inferred yet.",
+        "required": "Required",
+        "available": "Available",
+        "actor": "Actor",
+        "action": "Action",
+    }
+)
+
 
 def serve_dashboard(
     cfg: AppConfig,
@@ -310,8 +335,12 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
     monitor = state.get("monitor") if isinstance(state.get("monitor"), dict) else {}
     strategy = state.get("strategy") if isinstance(state.get("strategy"), dict) else {}
     production = monitor.get("production") if isinstance(monitor.get("production"), list) else []
+    throughput_constraints = (
+        monitor.get("throughput_constraints") if isinstance(monitor.get("throughput_constraints"), list) else []
+    )
     factory_sites = monitor.get("factory_sites") if isinstance(monitor.get("factory_sites"), list) else []
     logistics_links = monitor.get("logistics_links") if isinstance(monitor.get("logistics_links"), list) else []
+    factory_events = monitor.get("factory_events") if isinstance(monitor.get("factory_events"), list) else []
     bottlenecks = monitor.get("bottlenecks") if isinstance(monitor.get("bottlenecks"), list) else []
     inventory = monitor.get("inventory") if isinstance(monitor.get("inventory"), dict) else {}
     technologies = monitor.get("technology_chain") if isinstance(monitor.get("technology_chain"), list) else []
@@ -364,6 +393,11 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
       </div>
     </section>
 
+    <section class="panel">
+      <h2>{_t(lang, "throughput_constraints")}</h2>
+      {_throughput_constraint_table(throughput_constraints, lang)}
+    </section>
+
     <section class="grid">
       <div class="panel">
         <h2>{_t(lang, "factory_sites")}</h2>
@@ -373,6 +407,11 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
         <h2>{_t(lang, "logistics_links")}</h2>
         {_logistics_link_table(logistics_links, lang)}
       </div>
+    </section>
+
+    <section class="panel">
+      <h2>{_t(lang, "factory_events")}</h2>
+      {_factory_event_table(factory_events, lang)}
     </section>
 
     <section class="grid">
@@ -625,6 +664,28 @@ def _bottleneck_table(rows: list[Any], lang: str) -> str:
     )
 
 
+def _throughput_constraint_table(rows: list[Any], lang: str) -> str:
+    if not rows:
+        return f"<p class=\"muted\">{_t(lang, 'no_throughput_constraints')}</p>"
+    body = "".join(
+        "<tr>"
+        f"<td>{_item_cell(str(row.get('item') or ''))}</td>"
+        f"<td>{escape(str(row.get('required_per_minute') or 0))}</td>"
+        f"<td>{escape(str(row.get('available_per_minute') or 0))}</td>"
+        f"<td>{escape(str(row.get('bottleneck') or ''))}</td>"
+        f"<td>{escape('; '.join(str(item) for item in row.get('notes', [])[:2]))}</td>"
+        "</tr>"
+        for row in rows[:40]
+        if isinstance(row, dict)
+    )
+    return (
+        f"<table><thead><tr><th>{_t(lang, 'item')}</th><th>{_t(lang, 'required')}</th>"
+        f"<th>{_t(lang, 'available')}</th><th>{_t(lang, 'bottlenecks')}</th>"
+        f"<th>{_t(lang, 'reason')}</th></tr></thead>"
+        f"<tbody>{body}</tbody></table>"
+    )
+
+
 def _factory_site_table(rows: list[Any], lang: str) -> str:
     if not rows:
         return f"<p class=\"muted\">{_t(lang, 'no_sites')}</p>"
@@ -667,6 +728,28 @@ def _logistics_link_table(rows: list[Any], lang: str) -> str:
         f"<table><thead><tr><th>{_t(lang, 'kind')}</th><th>{_t(lang, 'item')}</th>"
         f"<th>{_t(lang, 'from')}</th><th>{_t(lang, 'to')}</th>"
         f"<th>{_t(lang, 'status')}</th><th>{_t(lang, 'length')}</th></tr></thead>"
+        f"<tbody>{body}</tbody></table>"
+    )
+
+
+def _factory_event_table(rows: list[Any], lang: str) -> str:
+    if not rows:
+        return f"<p class=\"muted\">{_t(lang, 'no_factory_events')}</p>"
+    body = "".join(
+        "<tr>"
+        f"<td>{escape(str(row.get('tick') or ''))}</td>"
+        f"<td>{escape(str(row.get('actor') or ''))}</td>"
+        f"<td>{escape(str(row.get('action') or ''))}</td>"
+        f"<td>{escape(str(row.get('entity') or ''))}</td>"
+        f"<td>{escape(_position_text(row.get('position')))}</td>"
+        "</tr>"
+        for row in rows[:40]
+        if isinstance(row, dict)
+    )
+    return (
+        f"<table><thead><tr><th>{_t(lang, 'tick')}</th><th>{_t(lang, 'actor')}</th>"
+        f"<th>{_t(lang, 'action')}</th><th>{_t(lang, 'item')}</th>"
+        f"<th>{_t(lang, 'position')}</th></tr></thead>"
         f"<tbody>{body}</tbody></table>"
     )
 

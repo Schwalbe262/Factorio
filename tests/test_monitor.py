@@ -6,7 +6,10 @@ from factorio_ai.monitor import (
     estimate_logistics_links,
     estimate_net_rates,
     estimate_production,
+    estimate_throughput_constraints,
     production_target_status,
+    recent_factory_events,
+    recipe_machine_ratio,
     summarize_factory,
 )
 from factorio_ai.monitor import ConsumptionEstimate, ProductionEstimate
@@ -54,6 +57,40 @@ class MonitorTests(unittest.TestCase):
         by_item = {item.item: item for item in estimates}
         self.assertIn("electronic-circuit", by_item)
         self.assertEqual(by_item["electronic-circuit"].per_minute, 60.0)
+
+    def test_electronic_circuit_ratio_uses_recipe_speed(self):
+        ratio = recipe_machine_ratio("copper-cable", "electronic-circuit", "copper-cable")
+        self.assertEqual(ratio["producer"], 3.0)
+        self.assertEqual(ratio["consumer"], 2.0)
+        self.assertEqual(ratio["producer_per_minute"], 120.0)
+        self.assertEqual(ratio["consumer_demand_per_minute"], 180.0)
+
+    def test_throughput_constraints_detect_cable_deficit(self):
+        constraints = estimate_throughput_constraints(
+            {
+                "entities": [
+                    {
+                        "name": "assembling-machine-1",
+                        "recipe": "copper-cable",
+                        "electric_network_connected": True,
+                    },
+                    {
+                        "name": "assembling-machine-1",
+                        "recipe": "electronic-circuit",
+                        "electric_network_connected": True,
+                    },
+                    {
+                        "name": "assembling-machine-1",
+                        "recipe": "electronic-circuit",
+                        "electric_network_connected": True,
+                    },
+                ]
+            }
+        )
+        cable = next(item for item in constraints if item.item == "copper-cable")
+        self.assertEqual(cable.available_per_minute, 120.0)
+        self.assertEqual(cable.required_per_minute, 360.0)
+        self.assertIn("ratio is 3:2", " ".join(cable.notes))
 
     def test_ignores_unpowered_assembler_output(self):
         estimates = estimate_production(
@@ -153,6 +190,61 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(smelting.automation_level, "burner-bootstrap")
         self.assertIn("electric mining drills", " ".join(smelting.notes))
 
+    def test_factory_sites_group_adjacent_smelting_lines(self):
+        sites = estimate_factory_sites(
+            {
+                "entities": [
+                    {"name": "burner-mining-drill", "unit_number": 1, "position": {"x": 4, "y": 0}, "inventories": {"1": {"coal": 1}}},
+                    {"name": "transport-belt", "position": {"x": 6, "y": 0}, "direction": 4, "inventories": {}},
+                    {"name": "transport-belt", "position": {"x": 7, "y": 0}, "direction": 4, "inventories": {}},
+                    {"name": "burner-inserter", "position": {"x": 8, "y": 0}, "inventories": {"1": {"coal": 1}}},
+                    {"name": "stone-furnace", "unit_number": 2, "position": {"x": 9, "y": 0}, "inventories": {"1": {"coal": 1}}},
+                    {"name": "burner-mining-drill", "unit_number": 3, "position": {"x": 4, "y": 3}, "inventories": {"1": {"coal": 1}}},
+                    {"name": "transport-belt", "position": {"x": 6, "y": 3}, "direction": 4, "inventories": {}},
+                    {"name": "transport-belt", "position": {"x": 7, "y": 3}, "direction": 4, "inventories": {}},
+                    {"name": "burner-inserter", "position": {"x": 8, "y": 3}, "inventories": {"1": {"coal": 1}}},
+                    {"name": "stone-furnace", "unit_number": 4, "position": {"x": 9, "y": 3}, "inventories": {"1": {"coal": 1}}},
+                ],
+                "resources": [
+                    {"name": "iron-ore", "position": {"x": 4, "y": 0}},
+                    {"name": "iron-ore", "position": {"x": 4, "y": 3}},
+                ],
+            }
+        )
+        smelting_sites = [item for item in sites if item.kind == "plate_smelting_line" and item.item == "iron-plate"]
+        self.assertEqual(len(smelting_sites), 1)
+        self.assertIn("running", smelting_sites[0].status)
+        self.assertIn("burner-mining-drill x2", smelting_sites[0].machines)
+        self.assertIn("stone-furnace x2", smelting_sites[0].machines)
+        self.assertIn("grouped", smelting_sites[0].notes[0])
+
+    def test_factory_sites_group_adjacent_assembler_cells(self):
+        sites = estimate_factory_sites(
+            {
+                "entities": [
+                    {
+                        "name": "assembling-machine-1",
+                        "unit_number": 20,
+                        "position": {"x": 2, "y": 2},
+                        "electric_network_connected": True,
+                        "inventories": {},
+                    },
+                    {
+                        "name": "assembling-machine-1",
+                        "unit_number": 21,
+                        "position": {"x": 2, "y": 5},
+                        "electric_network_connected": True,
+                        "inventories": {},
+                    },
+                ],
+                "resources": [],
+            }
+        )
+        assembler_sites = [item for item in sites if item.kind == "assembler_cell"]
+        self.assertEqual(len(assembler_sites), 1)
+        self.assertEqual(assembler_sites[0].status, "unconfigured")
+        self.assertIn("assembling-machine-1 x2", assembler_sites[0].machines)
+
     def test_logistics_links_include_belt_and_manual_boiler_feed(self):
         observation = {
             "entities": [
@@ -188,6 +280,26 @@ class MonitorTests(unittest.TestCase):
         self.assertIn("factory_sites", summary)
         self.assertIn("logistics_links", summary)
         self.assertEqual(summary["factory_sites"][0]["kind"], "build_item_mall")
+
+    def test_recent_factory_events_normalizes_player_builds(self):
+        events = recent_factory_events(
+            {
+                "factory_events": [
+                    {
+                        "tick": 123,
+                        "action": "built",
+                        "actor": {"kind": "player", "name": "r1jae"},
+                        "entity": "assembling-machine-1",
+                        "unit_number": 42,
+                        "position": {"x": 10, "y": 20},
+                        "distance": 5,
+                    }
+                ]
+            }
+        )
+        self.assertEqual(events[0]["actor"], "r1jae")
+        self.assertEqual(events[0]["action"], "built")
+        self.assertEqual(events[0]["entity"], "assembling-machine-1")
 
 
 if __name__ == "__main__":

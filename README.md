@@ -102,10 +102,22 @@ Or run the Windows helpers from the repository root:
 ```bat
 run_factorio_non_gui.bat
 run_factorio_gui.bat
+run_factorio_review_gui.bat
+run_factorio_watch_gui.bat
 ```
 
 `run_factorio_non_gui.bat` starts the development server in a separate window and repeatedly executes
 strategic steps. `run_factorio_gui.bat` opens the configured save for visual inspection.
+`run_factorio_review_gui.bat` is for interruptible manual inspection: it connects a GUI client to the
+current AI server, creates `runtime\review.lock` while the GUI is open, and the non-GUI loop waits on
+that lock before continuing. Close the Factorio window when inspection is done.
+`run_factorio_watch_gui.bat` connects a GUI client without creating that lock, so the AI keeps running
+while you watch. Manual movement can be overridden by the AI in watch mode.
+
+The development server is launched as multiplayer (`--start-server` plus GUI `--mp-connect`) and now
+allows multiple players. This is still the mod/RCON development track: other clients must match the
+server's mod set. The final achievement-compatible multiplayer track must be vanilla and use only
+ordinary keyboard/mouse input.
 
 In another terminal, run the iron plate MVP loop:
 
@@ -173,8 +185,14 @@ The dashboard can switch between EN and KR from the header.
 
 The monitor has no login, no admin role, and no session expiry. It shows estimated production,
 estimated consumption, net rates, target deficits, bottlenecks, dependency tree, and technology
-chain. Desired production targets are editable per item. If user targets are satisfied, the
+chain. It also shows recent player/robot factory edits from the development mod and early throughput
+constraints such as recipe ratios, belt capacity, and inserter transfer estimates. Desired production
+targets are editable per item. If user targets are satisfied, the
 strategic LLM may raise targets or add the next rocket-program item automatically.
+
+For example, vanilla electronic circuits require 3 copper cable assemblers for every 2 electronic
+circuit assemblers at the same assembler tier: one copper cable assembler outputs 120 cable/min in an
+assembling-machine-1, while one circuit assembler consumes 180 cable/min.
 
 Use this for production runs when a real LLM endpoint is configured:
 

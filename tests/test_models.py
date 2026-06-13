@@ -17,6 +17,10 @@ class ModelTests(unittest.TestCase):
         action = {"type": "research", "technology": "automation"}
         self.assertEqual(validate_action(action), action)
 
+    def test_validate_action_accepts_stop(self):
+        action = {"type": "stop"}
+        self.assertEqual(validate_action(action), action)
+
     def test_validate_action_accepts_set_recipe(self):
         action = {"type": "set_recipe", "recipe": "electronic-circuit", "unit_number": 10}
         self.assertEqual(validate_action(action), action)

@@ -44,7 +44,7 @@ def write_server_settings(cfg: AppConfig) -> Path:
         "name": "Factorio AI Autoplayer",
         "description": "Local Factorio AI development server",
         "tags": ["ai", "local"],
-        "max_players": 1,
+        "max_players": 8,
         "visibility": {"public": False, "lan": False},
         "username": "",
         "token": "",
@@ -108,10 +108,16 @@ def create_save(cfg: AppConfig, overwrite: bool = False) -> Path:
     return cfg.save_path
 
 
-def start_gui_client(cfg: AppConfig, window_size: str = "1600x900", connect: bool = True) -> subprocess.Popen[bytes]:
+def start_gui_client(
+    cfg: AppConfig,
+    window_size: str = "1600x900",
+    connect: bool = True,
+    ensure_mod: bool = True,
+) -> subprocess.Popen[bytes]:
     if not cfg.factorio_exe.exists():
         raise FileNotFoundError(f"Factorio executable not found: {cfg.factorio_exe}")
-    install_mod(cfg)
+    if ensure_mod:
+        install_mod(cfg)
     client_config = write_client_config(cfg)
     command = [
         str(cfg.factorio_exe),

@@ -107,6 +107,21 @@ class FactorioController:
             response = client.execute_json_command("ai_action", action)
         return response
 
+    def stop_agent(self) -> dict[str, Any]:
+        try:
+            response = self.act({"type": "stop"})
+            if response.get("ok"):
+                return response
+        except Exception as exc:
+            response = {"ok": False, "reason": str(exc)}
+
+        observation = self.observe()
+        current_position = player_position(observation)
+        fallback = self.act({"type": "move_to", "position": current_position})
+        fallback["fallbackFor"] = "stop"
+        fallback["previousStopResponse"] = response
+        return fallback
+
     def wait(self, ticks: int) -> dict[str, Any]:
         with self._client() as client:
             response = client.execute_json_command("ai_wait", str(ticks))
@@ -526,6 +541,7 @@ class FactorioController:
 
         with log_path.open("a", encoding="utf-8") as log_file:
             for step in range(1, max_steps + 1):
+                self._wait_for_review_window()
                 observation = self.observe()
                 decision = skill.next_action(observation)
                 item_count = total_item_count(observation, target_item)
@@ -597,6 +613,10 @@ class FactorioController:
         last_distance = initial_distance
 
         while time.monotonic() < deadline:
+            if self._review_lock_active():
+                self.stop_agent()
+                self._wait_for_review_window()
+                return False, "move paused for GUI review"
             observation = self.observe()
             current_position = player_position(observation)
             current_distance = distance(current_position, target)
@@ -611,6 +631,16 @@ class FactorioController:
             time.sleep(0.5)
 
         return False, f"move_to timed out; remaining distance {last_distance:.2f}"
+
+    def _review_lock_active(self) -> bool:
+        return (self.cfg.runtime_dir / "review.lock").exists()
+
+    def _wait_for_review_window(self) -> None:
+        if not self._review_lock_active():
+            return
+        self.stop_agent()
+        while self._review_lock_active():
+            time.sleep(1.0)
 
     def _maybe_apply_remote_hint(
         self,
