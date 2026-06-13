@@ -464,6 +464,39 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["item"], "coal")
         self.assertEqual(decision.action["name"], "burner-inserter")
 
+    def test_expand_smelting_uses_remaining_coal_before_mining_more(self):
+        obs = base_observation()
+        obs["inventory"] = {"coal": 8}
+        obs["resources"] = [
+            {"name": "copper-ore", "position": {"x": 4, "y": 0}, "distance": 4},
+            {"name": "coal", "position": {"x": 2, "y": 0}, "distance": 2},
+        ]
+        obs["entities"] = complete_belt_smelting_entities(4, 0, 500, resource="copper-ore", product="copper-plate")
+        for entity in obs["entities"]:
+            if entity["name"] == "burner-inserter":
+                entity["inventories"] = {}
+            if entity["name"] == "stone-furnace":
+                entity["inventories"] = {"1": {"coal": 1}}
+        decision = ExpandCopperSmeltingSkill(target_rate_per_minute=18).next_action(obs)
+        self.assertEqual(decision.action["type"], "insert")
+        self.assertEqual(decision.action["item"], "coal")
+        self.assertIn(decision.action["name"], {"burner-inserter", "stone-furnace"})
+
+    def test_expand_smelting_mines_coal_only_when_empty(self):
+        obs = base_observation()
+        obs["inventory"] = {"coal": 0}
+        obs["resources"] = [
+            {"name": "copper-ore", "position": {"x": 4, "y": 0}, "distance": 4},
+            {"name": "coal", "position": {"x": 2, "y": 0}, "distance": 2},
+        ]
+        obs["entities"] = complete_belt_smelting_entities(4, 0, 500, resource="copper-ore", product="copper-plate")
+        for entity in obs["entities"]:
+            if entity["name"] == "burner-inserter":
+                entity["inventories"] = {}
+        decision = ExpandCopperSmeltingSkill(target_rate_per_minute=18).next_action(obs)
+        self.assertEqual(decision.action["type"], "mine")
+        self.assertEqual(decision.action["name"], "coal")
+
     def test_expand_iron_smelting_clears_blocking_rock(self):
         obs = base_observation()
         obs["inventory"] = {

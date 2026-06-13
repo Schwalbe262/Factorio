@@ -512,12 +512,6 @@ class BeltSmeltingLineSkill:
         if layout is None:
             return PlannerDecision(None, f"cannot find open {self.resource_name} site for belt smelting line")
 
-        if inventory_count(observation, "coal") < 12:
-            coal = nearest_resource(observation, "coal")
-            if coal is None:
-                return PlannerDecision(None, "cannot find coal for burner smelting line")
-            return self.support_skill._mine_resource(player, coal, "coal", 16)
-
         need = _line_missing_item(observation, layout)
         if need:
             decision = self._ensure_item(observation, player, need)
@@ -558,6 +552,11 @@ class BeltSmeltingLineSkill:
         ]:
             entity = layout.get(_entity_key(entity_name))
             if entity and entity_item_count(entity, item) < threshold:
+                if inventory_count(observation, item) <= 0:
+                    coal = nearest_resource(observation, "coal")
+                    if coal is None:
+                        return PlannerDecision(None, "cannot find coal for burner smelting line")
+                    return self.support_skill._mine_resource(player, coal, "coal", 16)
                 position = _position(entity)
                 if distance(player, position) > 20:
                     return PlannerDecision(
@@ -687,12 +686,6 @@ class _ExpandPlateSmeltingSkill:
         if layout is None:
             return PlannerDecision(None, f"cannot find open {self.resource_name} site for another smelting line")
 
-        if inventory_count(observation, "coal") < 12:
-            coal = nearest_resource(observation, "coal")
-            if coal is None:
-                return PlannerDecision(None, f"cannot find coal for expanded {self.product_name} smelting")
-            return self.line_skill.support_skill._mine_resource(player, coal, "coal", 16)
-
         need = _line_missing_item(observation, layout)
         if need:
             decision = self.line_skill._ensure_item(observation, player, need)
@@ -750,6 +743,11 @@ class _ExpandPlateSmeltingSkill:
         ]:
             entity = layout.get(_entity_key(entity_name))
             if entity and entity_item_count(entity, item) < threshold:
+                if inventory_count(observation, item) <= 0:
+                    coal = nearest_resource(observation, "coal")
+                    if coal is None:
+                        return PlannerDecision(None, f"cannot find coal for expanded {self.product_name} smelting")
+                    return self.line_skill.support_skill._mine_resource(player, coal, "coal", 16)
                 position = _position(entity)
                 if distance(player, position) > 20:
                     return PlannerDecision(

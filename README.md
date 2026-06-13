@@ -207,6 +207,12 @@ Launch the normal Steam game for this track:
 factorio-ai launch-vanilla-gui
 ```
 
+Or use the Windows helper:
+
+```bat
+run_factorio_vanilla_gui.bat
+```
+
 This command uses `steam://rungameid/427520` and does not pass custom Factorio arguments. The
 vanilla executor must navigate the normal GUI, including New Game -> Freeplay (Space Age), with
 ordinary keyboard and mouse input. Any path using `--mod-directory`, RCON, or Lua commands belongs

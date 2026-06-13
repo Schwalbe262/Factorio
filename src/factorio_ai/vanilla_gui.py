@@ -24,6 +24,10 @@ FORBIDDEN_ACHIEVEMENT_ARGS = {
     "--map2scenario",
     "--scenario2map",
 }
+ACHIEVEMENT_SAFE_ARGS_WITH_VALUE = {
+    "--window-size",
+}
+ACHIEVEMENT_SAFE_FLAGS: set[str] = set()
 MOUSEEVENTF_LEFTDOWN = 0x0002
 MOUSEEVENTF_LEFTUP = 0x0004
 KEYEVENTF_KEYUP = 0x0002
@@ -56,12 +60,30 @@ class WindowRect:
 
 def validate_achievement_safe_args(args: Iterable[str]) -> list[str]:
     normalized = [str(arg) for arg in args]
+    expecting_value_for: str | None = None
     for index, arg in enumerate(normalized):
+        if expecting_value_for is not None:
+            if arg.startswith("--"):
+                raise AchievementPolicyError(f"{expecting_value_for} requires a value")
+            expecting_value_for = None
+            continue
+
         option = arg.split("=", 1)[0]
         if option in FORBIDDEN_ACHIEVEMENT_ARGS:
             raise AchievementPolicyError(f"argument is not achievement-compatible: {option}")
         if index > 0 and normalized[index - 1] in FORBIDDEN_ACHIEVEMENT_ARGS:
             raise AchievementPolicyError(f"argument follows forbidden option: {normalized[index - 1]}")
+        if option in ACHIEVEMENT_SAFE_ARGS_WITH_VALUE:
+            if "=" not in arg:
+                expecting_value_for = option
+            continue
+        if option in ACHIEVEMENT_SAFE_FLAGS:
+            continue
+        if arg.startswith("--"):
+            raise AchievementPolicyError(f"argument is not explicitly achievement-safe: {option}")
+        raise AchievementPolicyError(f"bare argument is not achievement-compatible: {arg}")
+    if expecting_value_for is not None:
+        raise AchievementPolicyError(f"{expecting_value_for} requires a value")
     return normalized
 
 
