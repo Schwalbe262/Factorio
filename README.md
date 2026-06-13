@@ -229,12 +229,35 @@ Or use the Windows helper:
 
 ```bat
 run_factorio_vanilla_gui.bat
+run_factorio_vanilla_probe.bat
 ```
 
 This command uses `steam://rungameid/427520` and does not pass custom Factorio arguments. The
 vanilla executor must navigate the normal GUI, including New Game -> Freeplay (Space Age), with
 ordinary keyboard and mouse input. Any path using `--mod-directory`, RCON, or Lua commands belongs
 to the development track and must not be used for achievement runs.
+
+The vanilla track changes the low-level algorithm, not the whole AI:
+
+- shared: LLM strategy, production targets, bottleneck reasoning, tech-tree planning, blueprint lessons, and skill selection;
+- development adapter: exact Lua/RCON observation plus allowlisted action execution for fast verification;
+- vanilla adapter: screen/window capture, OCR or visual classifiers, hotkeys, mouse clicks, and ordinary keyboard movement;
+- required contract: the same skill intent, such as `expand_iron_smelting`, must be executable through either adapter.
+
+Useful vanilla diagnostics:
+
+```powershell
+factorio-ai vanilla-window
+factorio-ai vanilla-screenshot --output runtime\vanilla\screenshots\current.bmp
+factorio-ai vanilla-probe --minimize-check
+```
+
+For background use, keep the Factorio window open but not minimized. The default screenshot method
+uses `PrintWindow`, which can capture the Factorio window even when another app covers it. Minimized
+play is different: the current probe only gets a small title-bar-sized frame after minimization, so
+minimized automation is not enabled. Foreground `SendInput` remains the reliable
+achievement-compatible input path; background `PostMessage` can be probed, but Factorio must prove it
+actually consumes those inputs before background movement/building is trusted.
 
 ## Blueprint Library
 

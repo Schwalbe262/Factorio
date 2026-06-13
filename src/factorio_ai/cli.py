@@ -57,6 +57,24 @@ def main(argv: list[str] | None = None) -> None:
     vanilla_gui_parser.add_argument("--direct", action="store_true", help="Launch factorio.exe directly instead of Steam")
     vanilla_gui_parser.add_argument("--window-size", help="Optional direct-launch window size, e.g. 1600x900")
 
+    vanilla_window_parser = subparsers.add_parser("vanilla-window", help="Report the detected vanilla Factorio window")
+    vanilla_window_parser.add_argument("--activate", action="store_true", help="Bring the Factorio window to foreground")
+
+    vanilla_screenshot_parser = subparsers.add_parser(
+        "vanilla-screenshot",
+        help="Capture the detected vanilla Factorio window without mods or RCON",
+    )
+    vanilla_screenshot_parser.add_argument("--output", help="Output BMP path")
+    vanilla_screenshot_parser.add_argument("--method", choices=["auto", "screen", "window"], default="auto")
+
+    vanilla_probe_parser = subparsers.add_parser(
+        "vanilla-probe",
+        help="Probe vanilla screen capture and background/minimized input capabilities",
+    )
+    vanilla_probe_parser.add_argument("--output-dir", help="Directory for probe screenshots")
+    vanilla_probe_parser.add_argument("--minimize-check", action="store_true", help="Temporarily minimize Factorio and try PrintWindow capture")
+    vanilla_probe_parser.add_argument("--background-key", help="Post one key to the Factorio window without foreground activation")
+
     confirm_parser = subparsers.add_parser("confirm-steam-launch", help="Click Steam's custom-arguments continue prompt")
     confirm_parser.add_argument("--timeout", type=float, default=15.0)
 
@@ -259,6 +277,28 @@ def main(argv: list[str] | None = None) -> None:
             launch_args.extend(["--window-size", args.window_size])
         proc = launch_vanilla_gui(cfg, via_steam=not args.direct, args=launch_args)
         print_json({"ok": True, "pid": proc.pid if proc else None, "viaSteam": not args.direct})
+        return
+
+    if args.command == "vanilla-window":
+        driver = VanillaGuiDriver(cfg)
+        activated = driver.activate_factorio(timeout_seconds=3.0) if args.activate else False
+        print_json({"ok": True, "activated": activated, "window": driver.factorio_window_state()})
+        return
+
+    if args.command == "vanilla-screenshot":
+        snapshot = VanillaGuiDriver(cfg).capture_factorio_window(args.output, method=args.method)
+        print_json({"ok": True, "snapshot": snapshot.to_dict(), "method": args.method})
+        return
+
+    if args.command == "vanilla-probe":
+        report = VanillaGuiDriver(cfg).probe_background_capabilities(
+            args.output_dir,
+            minimize_check=args.minimize_check,
+            background_key=args.background_key,
+        )
+        print_json({"ok": report.window_found, "probe": report.to_dict()})
+        if not report.window_found:
+            raise SystemExit(1)
         return
 
     if args.command == "confirm-steam-launch":
