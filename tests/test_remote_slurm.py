@@ -2,6 +2,7 @@ import unittest
 
 from factorio_ai.remote_slurm import (
     RemoteSlurmConfig,
+    _attached_env_setup,
     _gpu_allocation_visible,
     _llm_status_remediation,
     _status_needs_local_gpu,
@@ -73,6 +74,12 @@ class RemoteSlurmTests(unittest.TestCase):
         self.assertTrue(_status_needs_local_gpu({"FACTORIO_AI_VLLM_MODEL": "Qwen/Qwen3.5-4B"}))
         self.assertTrue(_status_needs_local_gpu({"FACTORIO_AI_LLM_BASE_URL": "http://127.0.0.1:8000/v1"}))
         self.assertFalse(_status_needs_local_gpu({"FACTORIO_AI_LLM_BASE_URL": "https://llm.example/v1"}))
+
+    def test_attached_env_setup_loads_remote_worker_config(self):
+        setup = _attached_env_setup("/home/user/kakao-bot-worker")
+        self.assertIn("/home/user/kakao-bot-worker/config.env", setup)
+        self.assertIn("FACTORIO_AI_LLM_*|FACTORIO_AI_VLLM_*|FACTORIO_AI_CONDA_ENV", setup)
+        self.assertIn('export "$key=$value"', setup)
 
     def test_strategy_model_benchmark_runs_same_payload_per_model(self):
         result = run_strategy_model_benchmark(

@@ -35,6 +35,7 @@ VLLM_ENV_VARS = (
     "FACTORIO_AI_VLLM_MODEL",
     "FACTORIO_AI_VLLM_PORT",
     "FACTORIO_AI_VLLM_ARGS",
+    "FACTORIO_AI_VLLM_CUDA_VISIBLE_DEVICES",
     "FACTORIO_AI_VLLM_STARTUP_SECONDS",
 )
 GPU_ENV_VARS = (
@@ -240,7 +241,7 @@ print(json.dumps({{
     probe_runner = f"import base64; exec(base64.b64decode({encoded_probe!r}))"
     inner_command = (
         "set -euo pipefail; "
-        f"{_attached_env_setup()}"
+        f"{_attached_env_setup(remote_dir)}"
         f"python3 -c {shlex.quote(probe_runner)}"
     )
     try:
@@ -613,7 +614,7 @@ def _request_task_via_attached_srun(
     payload = base64.b64encode(json.dumps(task, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).decode("ascii")
     inner_command = (
         "set -euo pipefail; "
-        f"{_attached_env_setup()}"
+        f"{_attached_env_setup(remote_dir)}"
         f"source ~/miniconda3/etc/profile.d/conda.sh && "
         f"conda activate {shlex.quote(cfg.conda_env)} && "
         f"cd {shlex.quote(remote_dir + '/factorio-ai')} && "
@@ -697,8 +698,19 @@ def _llm_env_presence(env: Any) -> dict[str, bool]:
     return {name: bool(env.get(name)) for name in LLM_ENV_VARS + VLLM_ENV_VARS}
 
 
-def _attached_env_setup() -> str:
+def _attached_env_setup(remote_dir: str | None = None) -> str:
     commands = []
+    if remote_dir:
+        config_path = shlex.quote(f"{remote_dir}/config.env")
+        commands.append(
+            f"if [[ -f {config_path} ]]; then "
+            f"while IFS='=' read -r key value; do "
+            f"case \"$key\" in FACTORIO_AI_LLM_*|FACTORIO_AI_VLLM_*|FACTORIO_AI_CONDA_ENV) "
+            f"export \"$key=$value\";; "
+            f"esac; "
+            f"done < {config_path}; "
+            f"fi"
+        )
     for name in LLM_ENV_VARS + VLLM_ENV_VARS:
         value = os.getenv(name)
         if value:
