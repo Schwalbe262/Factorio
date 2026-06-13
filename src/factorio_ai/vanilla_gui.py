@@ -5,17 +5,19 @@ import ctypes
 import ctypes.wintypes
 import os
 from pathlib import Path
+import json
 import struct
 import subprocess
 import time
 from typing import Iterable
+import urllib.parse
 
 from .config import AppConfig
 
 
 FACTORIO_STEAM_APP_ID = "427520"
+OFFICIAL_VANILLA_MODS = ("base", "elevated-rails", "quality", "space-age")
 FORBIDDEN_ACHIEVEMENT_ARGS = {
-    "--mod-directory",
     "--rcon-port",
     "--rcon-password",
     "--start-server",
@@ -32,6 +34,7 @@ ACHIEVEMENT_SAFE_FLAGS: set[str] = set()
 MOUSEEVENTF_LEFTDOWN = 0x0002
 MOUSEEVENTF_LEFTUP = 0x0004
 KEYEVENTF_KEYUP = 0x0002
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 SW_MINIMIZE = 6
 SW_RESTORE = 9
 SRCCOPY = 0x00CC0020
@@ -206,15 +209,31 @@ def validate_achievement_safe_args(args: Iterable[str]) -> list[str]:
 
 def launch_vanilla_gui(cfg: AppConfig, *, via_steam: bool = True, args: Iterable[str] = ()) -> subprocess.Popen[bytes] | None:
     safe_args = validate_achievement_safe_args(args)
+    mod_dir = prepare_vanilla_mod_directory(cfg.runtime_dir)
+    launch_args = [*safe_args, "--mod-directory", str(mod_dir)]
     if via_steam:
-        if safe_args:
-            raise AchievementPolicyError("Steam vanilla launch must not include custom Factorio args")
-        os.startfile(f"steam://rungameid/{FACTORIO_STEAM_APP_ID}")  # type: ignore[attr-defined]
+        command_line = subprocess.list2cmdline(launch_args)
+        encoded_args = urllib.parse.quote(command_line, safe="")
+        os.startfile(f"steam://run/{FACTORIO_STEAM_APP_ID}//{encoded_args}")  # type: ignore[attr-defined]
         return None
 
     if not cfg.factorio_exe.exists():
         raise FileNotFoundError(f"Factorio executable not found: {cfg.factorio_exe}")
-    return subprocess.Popen([str(cfg.factorio_exe), *safe_args], cwd=str(Path.cwd()))
+    return subprocess.Popen([str(cfg.factorio_exe), *launch_args], cwd=str(Path.cwd()))
+
+
+def prepare_vanilla_mod_directory(runtime_dir: Path) -> Path:
+    mod_dir = runtime_dir / "vanilla" / "mods"
+    mod_dir.mkdir(parents=True, exist_ok=True)
+    unsafe_children = [child.name for child in mod_dir.iterdir() if child.name != "mod-list.json"]
+    if unsafe_children:
+        raise AchievementPolicyError(
+            "vanilla mod directory must contain only mod-list.json; "
+            f"remove these files before launching: {', '.join(sorted(unsafe_children))}"
+        )
+    payload = {"mods": [{"name": name, "enabled": True} for name in OFFICIAL_VANILLA_MODS]}
+    (mod_dir / "mod-list.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return mod_dir
 
 
 class VanillaGuiDriver:
@@ -254,23 +273,39 @@ class VanillaGuiDriver:
             "hwnd": hwnd,
             "title": title,
             "minimized": self.is_minimized(hwnd),
-            "rect": {
-                "left": rect.left,
-                "top": rect.top,
-                "right": rect.right,
-                "bottom": rect.bottom,
-                "width": rect.width,
-                "height": rect.height,
-            },
+            "rect": _rect_dict(rect),
         }
 
     def factorio_windows(self) -> list[tuple[int, str]]:
         windows: list[tuple[int, str]] = []
         for hwnd, title in self._top_level_windows():
             normalized = title.strip()
-            if is_factorio_game_window_title(normalized):
+            process_path = self._window_process_path(hwnd)
+            if is_factorio_game_window_title(normalized) and is_factorio_process_path(process_path):
                 windows.append((hwnd, normalized))
         return windows
+
+    def factorio_window_diagnostics(self) -> dict[str, object]:
+        accepted: list[dict[str, object]] = []
+        factorio_process_windows: list[dict[str, object]] = []
+        rejected_factorio_title_windows: list[dict[str, object]] = []
+        for hwnd, title in self._top_level_windows():
+            normalized = title.strip()
+            process_path = self._window_process_path(hwnd)
+            is_factorio_exe = is_factorio_process_path(process_path)
+            is_factorio_title = is_factorio_game_window_title(normalized)
+            record = self._window_record(hwnd, normalized, process_path)
+            if is_factorio_exe:
+                factorio_process_windows.append(record)
+            if is_factorio_title and is_factorio_exe:
+                accepted.append(record)
+            elif is_factorio_title:
+                rejected_factorio_title_windows.append(record)
+        return {
+            "acceptedGameWindows": accepted,
+            "factorioProcessWindows": factorio_process_windows,
+            "rejectedFactorioTitleWindows": rejected_factorio_title_windows,
+        }
 
     def find_factorio_window(self) -> tuple[int, str] | None:
         windows = self.factorio_windows()
@@ -468,6 +503,20 @@ class VanillaGuiDriver:
             ctypes.wintypes.LPARAM,
         ]
         self.user32.PrintWindow.argtypes = [ctypes.wintypes.HWND, ctypes.wintypes.HDC, ctypes.wintypes.UINT]
+        self.user32.GetWindowThreadProcessId.argtypes = [ctypes.wintypes.HWND, ctypes.POINTER(ctypes.wintypes.DWORD)]
+        self.user32.GetWindowThreadProcessId.restype = ctypes.wintypes.DWORD
+        self.kernel32 = ctypes.windll.kernel32
+        self.kernel32.OpenProcess.argtypes = [ctypes.wintypes.DWORD, ctypes.wintypes.BOOL, ctypes.wintypes.DWORD]
+        self.kernel32.OpenProcess.restype = ctypes.wintypes.HANDLE
+        self.kernel32.QueryFullProcessImageNameW.argtypes = [
+            ctypes.wintypes.HANDLE,
+            ctypes.wintypes.DWORD,
+            ctypes.wintypes.LPWSTR,
+            ctypes.POINTER(ctypes.wintypes.DWORD),
+        ]
+        self.kernel32.QueryFullProcessImageNameW.restype = ctypes.wintypes.BOOL
+        self.kernel32.CloseHandle.argtypes = [ctypes.wintypes.HANDLE]
+        self.kernel32.CloseHandle.restype = ctypes.wintypes.BOOL
         self.gdi32.CreateCompatibleDC.restype = ctypes.wintypes.HDC
         self.gdi32.CreateCompatibleDC.argtypes = [ctypes.wintypes.HDC]
         self.gdi32.DeleteDC.argtypes = [ctypes.wintypes.HDC]
@@ -496,6 +545,36 @@ class VanillaGuiDriver:
             ctypes.c_void_p,
             ctypes.wintypes.UINT,
         ]
+
+    def _window_process_path(self, hwnd: int) -> str | None:
+        pid = ctypes.wintypes.DWORD()
+        self.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if not pid.value:
+            return None
+        handle = self.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value)
+        if not handle:
+            return None
+        try:
+            size = ctypes.wintypes.DWORD(32768)
+            buffer = ctypes.create_unicode_buffer(size.value)
+            if not self.kernel32.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
+                return None
+            return buffer.value
+        finally:
+            self.kernel32.CloseHandle(handle)
+
+    def _window_record(self, hwnd: int, title: str, process_path: str | None) -> dict[str, object]:
+        try:
+            rect = self._window_rect(hwnd)
+            rect_payload = _rect_dict(rect)
+        except GuiAutomationError as exc:
+            rect_payload = {"error": str(exc)}
+        return {
+            "hwnd": hwnd,
+            "title": title,
+            "processPath": process_path,
+            "rect": rect_payload,
+        }
 
     def _find_window_containing(self, text: str) -> int | None:
         needle = text.lower()
@@ -615,6 +694,24 @@ def is_factorio_game_window_title(title: str) -> bool:
     if normalized == "Factorio":
         return True
     return normalized.startswith("Factorio:")
+
+
+def is_factorio_process_path(path: str | None) -> bool:
+    if not path:
+        return False
+    normalized = path.replace("/", "\\").lower()
+    return normalized.endswith("\\factorio.exe")
+
+
+def _rect_dict(rect: WindowRect) -> dict[str, int]:
+    return {
+        "left": rect.left,
+        "top": rect.top,
+        "right": rect.right,
+        "bottom": rect.bottom,
+        "width": rect.width,
+        "height": rect.height,
+    }
 
 
 def _capture_method(method: str, *, minimized: bool) -> str:

@@ -209,7 +209,7 @@ and Lua commands, so it is not intended for Steam achievement runs.
 
 Achievement-compatible play must run as a separate vanilla track:
 
-- no mods;
+- no non-official mods;
 - no Lua console commands;
 - no RCON world mutation;
 - one normal Factorio client controlled through ordinary keyboard and mouse input;
@@ -232,10 +232,16 @@ run_factorio_vanilla_gui.bat
 run_factorio_vanilla_probe.bat
 ```
 
-This command uses `steam://rungameid/427520` and does not pass custom Factorio arguments. The
-vanilla executor must navigate the normal GUI, including New Game -> Freeplay (Space Age), with
-ordinary keyboard and mouse input. Any path using `--mod-directory`, RCON, or Lua commands belongs
-to the development track and must not be used for achievement runs.
+This command uses Steam with an isolated `runtime\vanilla\mods` directory. That directory contains
+only a generated `mod-list.json` for the official Space Age set: `base`, `elevated-rails`,
+`quality`, and `space-age`. It deliberately ignores the user's global Factorio mod folder, because
+normal Steam launch would otherwise load enabled user mods and stop being a vanilla/achievement
+candidate. The vanilla executor must navigate the normal GUI, including New Game -> Freeplay
+(Space Age), with ordinary keyboard and mouse input. Any path using non-official mods, RCON, or Lua
+commands belongs to the development track and must not be used for achievement runs.
+`launch-vanilla-gui` reports failure if the real `factorio.exe` game window is not detected, and
+`vanilla-window` includes diagnostics for false positives such as Steam's Factorio settings window
+or Factorio-owned error dialogs.
 
 The vanilla track changes the low-level algorithm, not the whole AI:
 

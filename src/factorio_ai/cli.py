@@ -10,7 +10,7 @@ from .config import load_config
 from .controller import FactorioController
 from .factorio import create_save, install_mod, start_gui_client, start_save_gui, start_server, wait_for_rcon
 from . import remote_slurm
-from .vanilla_gui import VanillaGuiDriver, launch_vanilla_gui
+from .vanilla_gui import VanillaGuiDriver, launch_vanilla_gui, prepare_vanilla_mod_directory
 from .vanilla_perception import classify_bmp_file
 from .web_dashboard import FACTORIO_ROUTE, public_dashboard_urls, serve_dashboard
 
@@ -57,6 +57,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     vanilla_gui_parser.add_argument("--direct", action="store_true", help="Launch factorio.exe directly instead of Steam")
     vanilla_gui_parser.add_argument("--window-size", help="Optional direct-launch window size, e.g. 1600x900")
+    vanilla_gui_parser.add_argument("--wait-timeout", type=float, default=45.0, help="Seconds to wait for the real game window")
 
     vanilla_window_parser = subparsers.add_parser("vanilla-window", help="Report the detected vanilla Factorio window")
     vanilla_window_parser.add_argument("--activate", action="store_true", help="Bring the Factorio window to foreground")
@@ -297,13 +298,43 @@ def main(argv: list[str] | None = None) -> None:
         if args.window_size:
             launch_args.extend(["--window-size", args.window_size])
         proc = launch_vanilla_gui(cfg, via_steam=not args.direct, args=launch_args)
-        print_json({"ok": True, "pid": proc.pid if proc else None, "viaSteam": not args.direct})
+        driver = VanillaGuiDriver(cfg)
+        prompt_clicked = False
+        try:
+            prompt_clicked = driver.click_steam_continue_prompt(timeout_seconds=20.0)
+        except Exception:
+            prompt_clicked = False
+        window_ready = driver.activate_factorio(timeout_seconds=max(0.0, args.wait_timeout))
+        window_state = driver.factorio_window_state()
+        ok = bool(window_state.get("found"))
+        payload = {
+            "ok": ok,
+            "pid": proc.pid if proc else None,
+            "viaSteam": not args.direct,
+            "isolatedModDirectory": str(prepare_vanilla_mod_directory(cfg.runtime_dir)),
+            "steamPromptClicked": prompt_clicked,
+            "windowReady": window_ready,
+            "window": window_state,
+            "diagnostics": driver.factorio_window_diagnostics(),
+        }
+        if not ok:
+            payload["reason"] = "real Factorio game window was not detected after launch"
+        print_json(payload)
+        if not ok:
+            raise SystemExit(1)
         return
 
     if args.command == "vanilla-window":
         driver = VanillaGuiDriver(cfg)
         activated = driver.activate_factorio(timeout_seconds=3.0) if args.activate else False
-        print_json({"ok": True, "activated": activated, "window": driver.factorio_window_state()})
+        print_json(
+            {
+                "ok": True,
+                "activated": activated,
+                "window": driver.factorio_window_state(),
+                "diagnostics": driver.factorio_window_diagnostics(),
+            }
+        )
         return
 
     if args.command == "vanilla-screenshot":

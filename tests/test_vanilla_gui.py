@@ -1,5 +1,7 @@
 import struct
+import tempfile
 import unittest
+from pathlib import Path
 
 from factorio_ai.vanilla_gui import (
     AchievementPolicyError,
@@ -8,6 +10,8 @@ from factorio_ai.vanilla_gui import (
     _virtual_key,
     encode_bgra_bmp,
     is_factorio_game_window_title,
+    is_factorio_process_path,
+    prepare_vanilla_mod_directory,
     validate_achievement_safe_args,
 )
 
@@ -24,6 +28,22 @@ class VanillaGuiTests(unittest.TestCase):
     def test_rejects_mod_directory(self):
         with self.assertRaises(AchievementPolicyError):
             validate_achievement_safe_args(["--mod-directory", "runtime/mods"])
+
+    def test_prepares_isolated_space_age_mod_list(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            mod_dir = prepare_vanilla_mod_directory(Path(temp_dir))
+            mod_list = (mod_dir / "mod-list.json").read_text(encoding="utf-8")
+        self.assertIn('"name": "base"', mod_list)
+        self.assertIn('"name": "space-age"', mod_list)
+        self.assertNotIn("factorio_ai_autoplayer", mod_list)
+
+    def test_rejects_nonempty_vanilla_mod_directory(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            mod_dir = Path(temp_dir) / "vanilla" / "mods"
+            mod_dir.mkdir(parents=True)
+            (mod_dir / "some-user-mod.zip").write_text("not vanilla", encoding="utf-8")
+            with self.assertRaises(AchievementPolicyError):
+                prepare_vanilla_mod_directory(Path(temp_dir))
 
     def test_rejects_rcon(self):
         with self.assertRaises(AchievementPolicyError):
@@ -42,6 +62,11 @@ class VanillaGuiTests(unittest.TestCase):
         self.assertTrue(is_factorio_game_window_title("Factorio: Space Age 2.0.76"))
         self.assertFalse(is_factorio_game_window_title("Factorio Prints - Chrome"))
         self.assertFalse(is_factorio_game_window_title("Factorio - File Explorer"))
+
+    def test_factorio_process_filter_rejects_steam_windows(self):
+        self.assertTrue(is_factorio_process_path(r"C:\Steam\steamapps\common\Factorio\bin\x64\factorio.exe"))
+        self.assertFalse(is_factorio_process_path(r"C:\Program Files (x86)\Steam\bin\cef\steamwebhelper.exe"))
+        self.assertFalse(is_factorio_process_path(None))
 
     def test_capture_method_auto_uses_window_only_when_minimized(self):
         self.assertEqual(_capture_method("auto", minimized=False), "window")
