@@ -428,7 +428,10 @@ When urgent production, defense, research, and power work are not blocking progr
 idle strategy cycles to inspect the current site graph and generate simulated improvement candidates.
 The same background layout loop also runs when a strategy cycle is blocked because the selected skill
 has no deterministic executor yet. In that case the active skill is logged as `codex_wait:<skill>`,
-and Slurm keeps evaluating layout candidates while Codex implements the missing build logic.
+`runtime/codex-wait.json` records the active Codex wait state, and Slurm keeps evaluating layout
+candidates while Codex implements the missing build logic. Autopilot cycles pulse this wait state even
+if the next strategy request fails, so layout work does not stop just because a build-item executor is
+still being written.
 
 The current layout evaluator separates:
 

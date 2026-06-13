@@ -14,7 +14,7 @@ from factorio_ai.factorio import (
 )
 
 
-def test_config(root: Path) -> AppConfig:
+def make_test_config(root: Path) -> AppConfig:
     return AppConfig(
         factorio_exe=Path("factorio.exe"),
         runtime_dir=root / "runtime",
@@ -33,7 +33,7 @@ def test_config(root: Path) -> AppConfig:
 class FactorioProcessConfigTests(unittest.TestCase):
     def test_development_server_is_single_review_client_by_default(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            path = write_server_settings(test_config(Path(temp_dir)))
+            path = write_server_settings(make_test_config(Path(temp_dir)))
             payload = json.loads(path.read_text(encoding="utf-8"))
         self.assertEqual(payload["max_players"], 1)
         self.assertFalse(payload["visibility"]["public"])
@@ -41,7 +41,7 @@ class FactorioProcessConfigTests(unittest.TestCase):
 
     def test_no_mod_server_is_lan_visible_without_custom_mod(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            cfg = test_config(Path(temp_dir))
+            cfg = make_test_config(Path(temp_dir))
             path = write_no_mod_server_settings(cfg)
             payload = json.loads(path.read_text(encoding="utf-8"))
         self.assertEqual(payload["max_players"], 8)
@@ -51,7 +51,7 @@ class FactorioProcessConfigTests(unittest.TestCase):
 
     def test_no_mod_commands_use_isolated_official_mod_list(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            cfg = test_config(Path(temp_dir))
+            cfg = make_test_config(Path(temp_dir))
             save_path = no_mod_save_path(cfg)
             create_command = build_create_no_mod_save_command(cfg, save_path)
             server_settings = write_no_mod_server_settings(cfg)
@@ -78,7 +78,7 @@ class FactorioProcessConfigTests(unittest.TestCase):
 
     def test_no_mod_map_gen_settings_keep_enemies_but_expand_safe_start(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            path = write_no_mod_map_gen_settings(test_config(Path(temp_dir)))
+            path = write_no_mod_map_gen_settings(make_test_config(Path(temp_dir)))
             payload = json.loads(path.read_text(encoding="utf-8"))
         self.assertEqual(payload["starting_area"], 4)
         self.assertFalse(payload["peaceful_mode"])

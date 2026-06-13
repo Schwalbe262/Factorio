@@ -313,6 +313,9 @@ Key constraints to preserve:
 - While Codex is implementing a missing executor, the autopilot should keep
   submitting background `layout_improvement_request` work as
   `codex_wait:<skill>` so Slurm LLM cycles continue improving site layouts.
+  The active wait is persisted in `runtime/codex-wait.json`; autopilot emits a
+  layout heartbeat from that file at cycle start, even if the next strategy
+  call fails.
 - Site placement matters. Avoid building early factories on top of resource
   patches when possible.
 - Logistic links should be between sites, not individual belts.
@@ -382,6 +385,8 @@ Known checkpoints:
 - Part 34 diagnostic start was around `17,948,370` tokens.
 - Slurm GPU diagnosis checkpoint was `18,023,860` tokens.
 - Before creating this handoff file, `get_goal` reported `18,530,998` tokens.
+- Part 44 Codex-wait layout heartbeat was recorded at `25,234,416` tokens;
+  token usage delta in `logs/token_usage.jsonl` is `339,226`.
 
 Update this section or final response with the latest delta after completing
 the current task.

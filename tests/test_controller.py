@@ -11,7 +11,7 @@ from factorio_ai.llm_log import llm_decision_log_path
 from factorio_ai.models import PlannerDecision
 
 
-def test_config(root: Path) -> AppConfig:
+def make_test_config(root: Path) -> AppConfig:
     return AppConfig(
         factorio_exe=Path("factorio.exe"),
         runtime_dir=root / "runtime",
@@ -49,7 +49,7 @@ class ControllerTests(unittest.TestCase):
             },
         }
         with tempfile.TemporaryDirectory() as temp_dir:
-            cfg = replace(test_config(Path(temp_dir)), slurm_enabled=True)
+            cfg = replace(make_test_config(Path(temp_dir)), slurm_enabled=True)
             controller = FakeController(cfg)
             with (
                 patch("factorio_ai.remote_slurm.llm_status", return_value=pending_status) as status,
@@ -69,7 +69,7 @@ class ControllerTests(unittest.TestCase):
 
     def test_remote_action_hint_skips_queue_when_llm_pending(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            cfg = replace(test_config(Path(temp_dir)), slurm_enabled=True)
+            cfg = replace(make_test_config(Path(temp_dir)), slurm_enabled=True)
             controller = FactorioController(cfg)
             decision = PlannerDecision(
                 action={"type": "wait", "ticks": 60},
@@ -107,7 +107,7 @@ class ControllerTests(unittest.TestCase):
             "research": {"technologies": {}},
         }
         with tempfile.TemporaryDirectory() as temp_dir:
-            cfg = replace(test_config(Path(temp_dir)), slurm_enabled=True)
+            cfg = replace(make_test_config(Path(temp_dir)), slurm_enabled=True)
             controller = FactorioController(cfg)
             with (
                 patch.dict(
@@ -169,7 +169,7 @@ class ControllerTests(unittest.TestCase):
                 }
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            cfg = replace(test_config(Path(temp_dir)), slurm_enabled=True)
+            cfg = replace(make_test_config(Path(temp_dir)), slurm_enabled=True)
             controller = FakeController(cfg)
             with (
                 patch.dict(
@@ -185,6 +185,7 @@ class ControllerTests(unittest.TestCase):
 
             log_path = cfg.log_dir / "layout-improvement-background.jsonl"
             rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+            wait_state = json.loads((cfg.runtime_dir / "codex-wait.json").read_text(encoding="utf-8"))
 
         self.assertFalse(summary.ok)
         submit_task.assert_called_once()
@@ -193,10 +194,79 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(submitted["payload"]["active_skill"], "codex_wait:future_build_item_skill")
         self.assertEqual(rows[0]["event"], "layout_blocked_strategy_detected")
         self.assertEqual(rows[-1]["event"], "layout_task_submitted")
+        self.assertTrue(wait_state["active"])
+        self.assertEqual(wait_state["selected_skill"], "future_build_item_skill")
+        self.assertEqual(wait_state["active_skill"], "codex_wait:future_build_item_skill")
+
+    def test_autopilot_pulses_layout_work_while_codex_wait_state_is_active(self):
+        observation = {
+            "tick": 2,
+            "inventory": {},
+            "entities": [
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 20,
+                    "recipe": "transport-belt",
+                    "position": {"x": 12, "y": 4},
+                    "electric_network_connected": True,
+                    "inventories": {},
+                }
+            ],
+            "resources": [],
+            "research": {"technologies": {}},
+        }
+
+        class FailingController(FactorioController):
+            def observe(self):
+                return observation
+
+            def run_strategy_step(self, **kwargs):
+                raise RuntimeError("strategy endpoint unavailable")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cfg = replace(make_test_config(Path(temp_dir)), slurm_enabled=True)
+            cfg.runtime_dir.mkdir(parents=True, exist_ok=True)
+            (cfg.runtime_dir / "codex-wait.json").write_text(
+                json.dumps(
+                    {
+                        "active": True,
+                        "objective": "launch_rocket_program",
+                        "selected_skill": "future_build_item_skill",
+                        "active_skill": "codex_wait:future_build_item_skill",
+                        "reason": "Codex is implementing the missing build item executor.",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            controller = FailingController(cfg)
+            with (
+                patch.dict(
+                    "os.environ",
+                    {
+                        "FACTORIO_AI_BACKGROUND_LAYOUT_INTERVAL_SECONDS": "0",
+                        "FACTORIO_AI_BACKGROUND_LAYOUT_MODE": "queue",
+                    },
+                ),
+                patch("factorio_ai.remote_slurm.submit_task", return_value="layout-wait.json") as submit_task,
+                patch("factorio_ai.remote_slurm.read_task_state", return_value=("running", None, "")),
+            ):
+                summary = controller.run_autopilot_loop(cycles=1, sleep_seconds=0)
+
+            rows = [
+                json.loads(line)
+                for line in (cfg.log_dir / "layout-improvement-background.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+
+        self.assertFalse(summary.ok)
+        submit_task.assert_called_once()
+        submitted = submit_task.call_args.args[0]
+        self.assertEqual(submitted["payload"]["active_skill"], "codex_wait:future_build_item_skill")
+        self.assertTrue(any(row["event"] == "layout_codex_wait_heartbeat" for row in rows))
+        self.assertTrue(any(row["event"] == "layout_task_submitted" for row in rows))
 
     def test_strategy_runner_maps_implemented_material_skills(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            controller = FactorioController(test_config(Path(temp_dir)))
+            controller = FactorioController(make_test_config(Path(temp_dir)))
             config = controller._skill_run_config("produce_electronic_circuit", target_count=7, max_steps=123)
             self.assertIsNotNone(config)
             self.assertEqual(config["target_item"], "electronic-circuit")
@@ -205,7 +275,7 @@ class ControllerTests(unittest.TestCase):
 
     def test_strategy_runner_does_not_fake_automation_skill(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            controller = FactorioController(test_config(Path(temp_dir)))
+            controller = FactorioController(make_test_config(Path(temp_dir)))
             belt_config = controller._skill_run_config("build_belt_smelting_line", target_count=12, max_steps=222)
             self.assertIsNotNone(belt_config)
             self.assertEqual(belt_config["goal"], "build_belt_smelting_line")
@@ -293,7 +363,7 @@ class ControllerTests(unittest.TestCase):
                 )
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            controller = FakeController(test_config(Path(temp_dir)))
+            controller = FakeController(make_test_config(Path(temp_dir)))
             summary = controller.run_autopilot_loop(cycles=2, sleep_seconds=0)
             lines = summary.log_path.read_text(encoding="utf-8").strip().splitlines()
         self.assertTrue(summary.ok)
@@ -313,7 +383,7 @@ class ControllerTests(unittest.TestCase):
                 )
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            controller = FakeController(test_config(Path(temp_dir)))
+            controller = FakeController(make_test_config(Path(temp_dir)))
             summary = controller.run_autopilot_loop(cycles=1, sleep_seconds=0)
         self.assertFalse(summary.ok)
         self.assertEqual(summary.failures, 1)

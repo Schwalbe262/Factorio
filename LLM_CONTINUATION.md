@@ -287,6 +287,18 @@ logs the active skill as `codex_wait:<skill-name>` and keeps submitting
 simulation-only site-layout review tasks until Codex finishes the executor
 work and the next strategy cycle can run it.
 
+The active blocked executor is persisted in:
+
+```text
+runtime/codex-wait.json
+```
+
+Autopilot reads this file at the start of each cycle and submits a layout
+heartbeat before asking for another strategy step. This means that if a
+`bootstrap_build_item_mall`-style executor takes time to implement, the Slurm
+LLM should continue simulation-only site layout improvement until the executor
+exists and the wait state is cleared.
+
 Environment:
 
 ```powershell

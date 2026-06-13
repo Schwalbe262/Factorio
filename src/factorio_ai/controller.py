@@ -478,6 +478,12 @@ class FactorioController:
         selected = str(strategy.get("selected_skill") or strategy.get("selected_goal") or "")
         status = strategy.get("skill_status") if isinstance(strategy.get("skill_status"), dict) else {}
         if status.get("codex_required"):
+            self._record_codex_wait_state(
+                objective,
+                selected,
+                "executor missing; waiting for Codex implementation",
+                strategy,
+            )
             self._maybe_progress_background_layout_for_blocked_strategy(
                 objective,
                 selected,
@@ -493,6 +499,12 @@ class FactorioController:
 
         config = self._skill_run_config(selected, target_count=target_count, max_steps=max_steps)
         if config is None:
+            self._record_codex_wait_state(
+                objective,
+                selected,
+                "selected skill has no local runner; waiting for Codex implementation",
+                strategy,
+            )
             self._maybe_progress_background_layout_for_blocked_strategy(
                 objective,
                 selected,
@@ -505,6 +517,7 @@ class FactorioController:
                 selected_skill=selected,
                 strategy=strategy,
             )
+        self._clear_codex_wait_state(selected)
         config["objective"] = objective
         run = self._run_skill(**config)
         return StrategyStepSummary(
@@ -539,6 +552,7 @@ class FactorioController:
         try:
             with log_path.open("a", encoding="utf-8") as log_file:
                 while cycles <= 0 or completed < cycles:
+                    self._maybe_progress_codex_wait_layout(objective)
                     started = time.monotonic()
                     try:
                         last_step = self.run_strategy_step(
@@ -555,6 +569,7 @@ class FactorioController:
                             selected_skill="",
                             strategy={},
                         )
+                        self._maybe_progress_codex_wait_layout(objective, phase="cycle_error")
                     completed += 1
                     if not last_step.ok:
                         failures += 1
@@ -799,6 +814,97 @@ class FactorioController:
             total_item_count(observation, target_item),
             log_path,
             target_item,
+        )
+
+    def _codex_wait_path(self) -> Path:
+        return self.cfg.runtime_dir / "codex-wait.json"
+
+    def _record_codex_wait_state(
+        self,
+        objective: str,
+        selected_skill: str,
+        reason: str,
+        strategy: dict[str, Any],
+    ) -> None:
+        self.cfg.runtime_dir.mkdir(parents=True, exist_ok=True)
+        path = self._codex_wait_path()
+        previous = self._read_codex_wait_state()
+        started_at = previous.get("started_at") if previous.get("selected_skill") == selected_skill else None
+        payload = {
+            "active": True,
+            "started_at": started_at or datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "objective": objective,
+            "selected_skill": selected_skill,
+            "active_skill": f"codex_wait:{selected_skill}",
+            "reason": reason,
+            "strategy": strategy,
+            "layout_work": {
+                "enabled": True,
+                "mode": os.getenv("FACTORIO_AI_BACKGROUND_LAYOUT_MODE", "attach"),
+                "until": "Codex implements the missing deterministic executor and the skill becomes executable.",
+            },
+        }
+        with path.open("w", encoding="utf-8") as file:
+            json.dump(payload, file, ensure_ascii=False, indent=2)
+
+    def _read_codex_wait_state(self) -> dict[str, Any]:
+        path = self._codex_wait_path()
+        if not path.exists():
+            return {}
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def _clear_codex_wait_state(self, selected_skill: str) -> None:
+        state = self._read_codex_wait_state()
+        if not state.get("active") or state.get("selected_skill") != selected_skill:
+            return
+        state["active"] = False
+        state["cleared_at"] = datetime.now(timezone.utc).isoformat()
+        state["clear_reason"] = "deterministic executor is now available"
+        self.cfg.runtime_dir.mkdir(parents=True, exist_ok=True)
+        with self._codex_wait_path().open("w", encoding="utf-8") as file:
+            json.dump(state, file, ensure_ascii=False, indent=2)
+
+    def _maybe_progress_codex_wait_layout(self, objective: str, *, phase: str = "cycle_start") -> None:
+        state = self._read_codex_wait_state()
+        if not state.get("active"):
+            return
+        selected = str(state.get("selected_skill") or "")
+        if not selected:
+            return
+        wait_objective = str(state.get("objective") or objective)
+        try:
+            observation = self.observe()
+        except Exception as exc:  # noqa: BLE001
+            self._write_background_layout_log(
+                {
+                    "event": "layout_codex_wait_observe_failed",
+                    "phase": phase,
+                    "active_skill": f"codex_wait:{selected}",
+                    "active_step": 0,
+                    "block_reason": state.get("reason"),
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
+            return
+        self._write_background_layout_log(
+            {
+                "event": "layout_codex_wait_heartbeat",
+                "phase": phase,
+                "active_skill": f"codex_wait:{selected}",
+                "active_step": 0,
+                "block_reason": state.get("reason"),
+            }
+        )
+        self._maybe_progress_background_layout_work(
+            observation,
+            wait_objective,
+            f"codex_wait:{selected}",
+            0,
         )
 
     def _maybe_progress_background_layout_for_blocked_strategy(
