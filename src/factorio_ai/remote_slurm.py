@@ -175,13 +175,21 @@ def status(cfg: RemoteSlurmConfig | None = None) -> dict[str, Any]:
 JOB_NAME={json.dumps(cfg.job_name)}
 REMOTE_DIR={json.dumps(remote_dir)}
 echo "--- jobs ---"
-squeue -h -u "$USER" -n "$JOB_NAME" -t R,PD -o "%i|%T|%M|%L|%R|%b" || true
+JOBS="$(squeue -h -u "$USER" -n "$JOB_NAME" -t R,PD -o "%i|%T|%M|%L|%R|%b" || true)"
+printf '%s\\n' "$JOBS"
 echo "--- counts ---"
 for d in queue running results failed logs; do
   mkdir -p "$REMOTE_DIR/$d"
   printf '%s=%s\\n' "$d" "$(find "$REMOTE_DIR/$d" -maxdepth 1 -type f 2>/dev/null | wc -l | tr -d ' ')"
 done
 if [[ -f "$REMOTE_DIR/status.txt" ]]; then
+  STATUS_JOB_ID="$(awk -F= '$1 == "job_id" {{print $2; exit}}' "$REMOTE_DIR/status.txt" 2>/dev/null || true)"
+  if [[ -n "$STATUS_JOB_ID" ]] && ! printf '%s\\n' "$JOBS" | awk -F'|' -v job="$STATUS_JOB_ID" '$1 == job {{found=1}} END{{exit !found}}'; then
+    echo "--- status_stale ---"
+    echo "status_stale=true"
+    echo "stale_job_id=$STATUS_JOB_ID"
+    echo "stale_reason=job_id_not_in_squeue"
+  fi
   echo "--- status ---"
   cat "$REMOTE_DIR/status.txt"
 fi
