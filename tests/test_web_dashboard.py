@@ -151,6 +151,22 @@ class WebDashboardTests(unittest.TestCase):
                         }
                     ],
                 },
+                "layout_background": {
+                    "entries": [
+                        {
+                            "time": "2026-06-13T00:03:00+00:00",
+                            "event": "layout_result",
+                            "active_skill": "codex_wait:bootstrap_build_item_mall",
+                            "result": {
+                                "source": "llm",
+                                "score": 91,
+                                "selected_candidate_id": "compact-green-circuit-cell",
+                                "reasoning": "Reduce footprint before building more cells.",
+                            },
+                        }
+                    ],
+                    "entry_count": 1,
+                },
                 "llm_decisions": {
                     "entries": [
                         {
@@ -228,6 +244,9 @@ class WebDashboardTests(unittest.TestCase):
         self.assertIn("green-circuit-3-cable-2-circuit-cell", html)
         self.assertIn("rebalance_green_circuit_ratio", html)
         self.assertIn("3 copper-cable assemblers", html)
+        self.assertIn("codex_wait:bootstrap_build_item_mall", html)
+        self.assertIn("compact-green-circuit-cell", html)
+        self.assertIn("Reduce footprint", html)
 
     def test_token_usage_chart_uses_timestamp_spacing(self):
         svg = _token_usage_svg(

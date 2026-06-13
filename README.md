@@ -433,6 +433,19 @@ candidates while Codex implements the missing build logic. Autopilot cycles puls
 if the next strategy request fails, so layout work does not stop just because a build-item executor is
 still being written.
 
+For a standalone Codex wait, run the dedicated loop after a blocked strategy step writes
+`runtime/codex-wait.json`:
+
+```powershell
+$env:PYTHONPATH='src'
+python -m factorio_ai.cli run-no-mod-codex-wait-layout-loop --objective launch_rocket_program
+```
+
+This command keeps submitting simulation-only layout-improvement work until the Codex wait state is
+cleared. Use `--cycles N` for a bounded smoke test. Results are appended to
+`logs/layout-improvement-background.jsonl` and are shown in the dashboard's Background Layout Work
+panel.
+
 The current layout evaluator separates:
 
 - hard issues: disconnected power, incomplete logistics links, manual fuel/feed, remote starter power,

@@ -264,6 +264,73 @@ class ControllerTests(unittest.TestCase):
         self.assertTrue(any(row["event"] == "layout_codex_wait_heartbeat" for row in rows))
         self.assertTrue(any(row["event"] == "layout_task_submitted" for row in rows))
 
+    def test_codex_wait_layout_loop_keeps_submitting_until_wait_clears(self):
+        observation = {
+            "tick": 3,
+            "inventory": {},
+            "entities": [
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 30,
+                    "recipe": "electronic-circuit",
+                    "position": {"x": 20, "y": 4},
+                    "electric_network_connected": True,
+                    "inventories": {},
+                }
+            ],
+            "resources": [],
+            "research": {"technologies": {}},
+        }
+
+        class WaitingController(FactorioController):
+            def observe(self):
+                return observation
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cfg = replace(make_test_config(Path(temp_dir)), slurm_enabled=True)
+            cfg.runtime_dir.mkdir(parents=True, exist_ok=True)
+            (cfg.runtime_dir / "codex-wait.json").write_text(
+                json.dumps(
+                    {
+                        "active": True,
+                        "objective": "launch_rocket_program",
+                        "selected_skill": "future_build_item_skill",
+                        "active_skill": "codex_wait:future_build_item_skill",
+                        "reason": "Codex is implementing the missing build item executor.",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            controller = WaitingController(cfg)
+            with (
+                patch.dict(
+                    "os.environ",
+                    {
+                        "FACTORIO_AI_BACKGROUND_LAYOUT_INTERVAL_SECONDS": "0",
+                        "FACTORIO_AI_BACKGROUND_LAYOUT_MODE": "queue",
+                    },
+                ),
+                patch(
+                    "factorio_ai.remote_slurm.submit_task",
+                    side_effect=["layout-wait-1.json", "layout-wait-2.json"],
+                ) as submit_task,
+                patch("factorio_ai.remote_slurm.read_task_state", return_value=("result", {"ok": True}, "")),
+            ):
+                summary = controller.run_codex_wait_layout_loop(cycles=2, sleep_seconds=0)
+
+            rows = [
+                json.loads(line)
+                for line in (cfg.log_dir / "layout-improvement-background.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+
+        self.assertTrue(summary.ok)
+        self.assertEqual(summary.cycles, 2)
+        self.assertTrue(summary.wait_active)
+        self.assertEqual(submit_task.call_count, 2)
+        self.assertTrue(any(row["event"] == "layout_codex_wait_heartbeat" for row in rows))
+        self.assertTrue(any(row["event"] == "layout_result" for row in rows))
+        self.assertEqual(rows[-1]["event"], "layout_task_submitted")
+
     def test_strategy_runner_maps_implemented_material_skills(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             controller = FactorioController(make_test_config(Path(temp_dir)))

@@ -121,6 +121,30 @@ class AutopilotLoopSummary:
         }
 
 
+@dataclass
+class CodexWaitLayoutLoopSummary:
+    ok: bool
+    reason: str
+    objective: str
+    cycles: int
+    log_path: Path
+    active_skill: str = ""
+    wait_active: bool = False
+    interrupted: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "ok": self.ok,
+            "reason": self.reason,
+            "objective": self.objective,
+            "cycles": self.cycles,
+            "logPath": str(self.log_path),
+            "activeSkill": self.active_skill,
+            "waitActive": self.wait_active,
+            "interrupted": self.interrupted,
+        }
+
+
 class FactorioController:
     def __init__(self, cfg: AppConfig) -> None:
         self.cfg = cfg
@@ -608,6 +632,52 @@ class FactorioController:
             log_path=log_path,
             last_step=last_step,
             failures=failures,
+            interrupted=interrupted,
+        )
+
+    def run_codex_wait_layout_loop(
+        self,
+        objective: str = "launch_rocket_program",
+        *,
+        cycles: int = 0,
+        sleep_seconds: float = 20.0,
+    ) -> CodexWaitLayoutLoopSummary:
+        self.cfg.log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = self.cfg.log_dir / "layout-improvement-background.jsonl"
+        completed = 0
+        interrupted = False
+        active_skill = ""
+        reason = "no active Codex wait state"
+
+        try:
+            while cycles <= 0 or completed < cycles:
+                state = self._read_codex_wait_state()
+                if not state.get("active"):
+                    break
+                active_skill = str(state.get("active_skill") or f"codex_wait:{state.get('selected_skill') or ''}")
+                wait_objective = str(state.get("objective") or objective)
+                self._maybe_progress_codex_wait_layout(wait_objective, phase="wait_loop")
+                completed += 1
+                reason = "cycle limit reached" if cycles > 0 and completed >= cycles else "Codex wait layout loop running"
+                if cycles > 0 and completed >= cycles:
+                    break
+                time.sleep(max(0.0, sleep_seconds))
+        except KeyboardInterrupt:
+            interrupted = True
+            reason = "Codex wait layout loop interrupted by user"
+
+        state = self._read_codex_wait_state()
+        wait_active = bool(state.get("active"))
+        if completed > 0 and not wait_active and not interrupted:
+            reason = "Codex wait state cleared"
+        return CodexWaitLayoutLoopSummary(
+            ok=not interrupted,
+            reason=reason,
+            objective=objective,
+            cycles=completed,
+            log_path=log_path,
+            active_skill=active_skill,
+            wait_active=wait_active,
             interrupted=interrupted,
         )
 

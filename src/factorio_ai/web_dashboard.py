@@ -243,6 +243,10 @@ TEXT["en"].update(
         "layout_opportunities": "Opportunities",
         "layout_candidates": "Simulation Candidates",
         "no_layout_improvement": "No layout issues, optimization opportunities, or simulation candidates inferred yet.",
+        "layout_background": "Background Layout Work",
+        "no_layout_background": "No background layout work has been recorded yet.",
+        "event": "Event",
+        "active_skill": "Active Skill",
         "candidate": "Candidate",
         "pattern": "Pattern",
         "score": "Score",
@@ -259,6 +263,10 @@ TEXT["ko"].update(
         "layout_opportunities": "\uac1c\uc120 \uae30\ud68c",
         "layout_candidates": "\uc2dc\ubbac\ub808\uc774\uc158 \ud6c4\ubcf4",
         "no_layout_improvement": "\uc544\uc9c1 \ucd94\uc815\ub41c \ub808\uc774\uc544\uc6c3 \ubb38\uc81c, \uac1c\uc120 \uae30\ud68c, \uc2dc\ubbac\ub808\uc774\uc158 \ud6c4\ubcf4\uac00 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "layout_background": "\ubc31\uadf8\ub77c\uc6b4\ub4dc \ub808\uc774\uc544\uc6c3 \uc791\uc5c5",
+        "no_layout_background": "\uc544\uc9c1 \uae30\ub85d\ub41c \ubc31\uadf8\ub77c\uc6b4\ub4dc \ub808\uc774\uc544\uc6c3 \uc791\uc5c5\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "event": "\uc774\ubca4\ud2b8",
+        "active_skill": "\uc9c4\ud589 \uc2a4\ud0ac",
         "candidate": "\ud6c4\ubcf4",
         "pattern": "\ud328\ud134",
         "score": "\uc810\uc218",
@@ -409,6 +417,7 @@ def build_dashboard_state(cfg: AppConfig, objective: str) -> dict[str, Any]:
     targets = load_targets(cfg.runtime_dir, objective)
     token_usage = token_usage_summary(cfg.log_dir)
     llm_decisions = llm_decision_summary(cfg.log_dir)
+    layout_background = layout_background_summary(cfg.log_dir)
     try:
         observation, adapter = observe_dashboard_state(cfg)
         monitor = summarize_factory(observation, objective, production_targets=targets.per_minute)
@@ -428,6 +437,7 @@ def build_dashboard_state(cfg: AppConfig, objective: str) -> dict[str, Any]:
             "adapter": adapter,
             "monitor": monitor,
             "layout_improvement": layout_improvement,
+            "layout_background": layout_background,
             "strategy": strategy,
             "token_usage": token_usage,
             "llm_decisions": llm_decisions,
@@ -439,9 +449,34 @@ def build_dashboard_state(cfg: AppConfig, objective: str) -> dict[str, Any]:
             "objective": objective,
             "targets": targets.to_dict(),
             "error": friendly_dashboard_error(exc),
+            "layout_background": layout_background,
             "token_usage": token_usage,
             "llm_decisions": llm_decisions,
         }
+
+
+def layout_background_summary(log_dir: Any, *, limit: int = 20) -> dict[str, Any]:
+    path = log_dir / "layout-improvement-background.jsonl"
+    rows: list[dict[str, Any]] = []
+    if path.exists():
+        with path.open(encoding="utf-8") as file:
+            for line in file:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    raw = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(raw, dict):
+                    rows.append(raw)
+    entries = rows[-limit:] if limit >= 0 else rows
+    return {
+        "entries": entries,
+        "entry_count": len(rows),
+        "latest": entries[-1] if entries else None,
+        "log_path": str(path),
+    }
 
 
 def observe_dashboard_state(cfg: AppConfig) -> tuple[dict[str, Any], str]:
@@ -482,6 +517,10 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
               <p class="error">{escape(str(state.get("error") or "unknown error"))}</p>
             </section>
             {_llm_decision_panel(state.get("llm_decisions"), lang)}
+            <section class="panel">
+              <h2>{_t(lang, "layout_background")}</h2>
+              {_layout_background_panel(state.get("layout_background"), lang)}
+            </section>
             {_token_usage_panel(state.get("token_usage"), lang)}
             """,
             lang,
@@ -511,6 +550,7 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
     llm_decisions = state.get("llm_decisions") if isinstance(state.get("llm_decisions"), dict) else {}
     agent_marker = state.get("agent_marker") if isinstance(state.get("agent_marker"), dict) else {}
     layout_improvement = state.get("layout_improvement") if isinstance(state.get("layout_improvement"), dict) else {}
+    layout_background = state.get("layout_background") if isinstance(state.get("layout_background"), dict) else {}
 
     body = f"""
     <section class="summary">
@@ -599,6 +639,11 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
     <section class="panel">
       <h2>{_t(lang, "layout_improvement")}</h2>
       {_layout_improvement_panel(layout_improvement, lang)}
+    </section>
+
+    <section class="panel">
+      <h2>{_t(lang, "layout_background")}</h2>
+      {_layout_background_panel(layout_background, lang)}
     </section>
 
     <section class="panel">
@@ -1044,6 +1089,45 @@ def _layout_candidate_table(rows: list[Any], lang: str) -> str:
         f"<table><thead><tr><th>{_t(lang, 'candidate')}</th><th>{_t(lang, 'pattern')}</th>"
         f"<th>{_t(lang, 'score')}</th><th>{_t(lang, 'before')}</th><th>{_t(lang, 'after')}</th>"
         f"<th>{_t(lang, 'delta')}</th><th>{_t(lang, 'status')}</th></tr></thead><tbody>{body}</tbody></table>"
+    )
+
+
+def _layout_background_panel(value: Any, lang: str) -> str:
+    if not isinstance(value, dict):
+        return f"<p class=\"muted\">{_t(lang, 'no_layout_background')}</p>"
+    rows = value.get("entries") if isinstance(value.get("entries"), list) else []
+    if not rows:
+        return f"<p class=\"muted\">{_t(lang, 'no_layout_background')}</p>"
+    body = ""
+    for row in rows[-20:]:
+        if not isinstance(row, dict):
+            continue
+        result = row.get("result") if isinstance(row.get("result"), dict) else {}
+        detail = (
+            row.get("error")
+            or result.get("reasoning")
+            or result.get("next_simulation_focus")
+            or row.get("block_reason")
+            or row.get("task")
+            or row.get("state")
+            or ""
+        )
+        body += (
+            "<tr>"
+            f"<td>{escape(_format_kst_timestamp(row.get('time')))}</td>"
+            f"<td>{escape(str(row.get('event') or ''))}</td>"
+            f"<td>{escape(str(row.get('active_skill') or ''))}</td>"
+            f"<td>{escape(str(result.get('source') or row.get('mode') or ''))}</td>"
+            f"<td>{escape(str(result.get('score') or ''))}</td>"
+            f"<td>{escape(str(result.get('selected_candidate_id') or ''))}</td>"
+            f"<td>{escape(str(detail))}</td>"
+            "</tr>"
+        )
+    return (
+        f"<table><thead><tr><th>{_t(lang, 'updated')}</th><th>{_t(lang, 'event')}</th>"
+        f"<th>{_t(lang, 'active_skill')}</th><th>{_t(lang, 'source')}</th>"
+        f"<th>{_t(lang, 'score')}</th><th>{_t(lang, 'candidate')}</th>"
+        f"<th>{_t(lang, 'reason')}</th></tr></thead><tbody>{body}</tbody></table>"
     )
 
 

@@ -218,6 +218,22 @@ def main(argv: list[str] | None = None) -> None:
     no_mod_autopilot_parser.add_argument("--sleep-seconds", type=float, default=5.0)
     no_mod_autopilot_parser.add_argument("--stop-on-error", action="store_true")
 
+    codex_wait_layout_parser = subparsers.add_parser(
+        "run-codex-wait-layout-loop",
+        help="Keep submitting simulation-only layout improvement work while Codex is implementing a missing skill",
+    )
+    codex_wait_layout_parser.add_argument("--objective", default="launch_rocket_program")
+    codex_wait_layout_parser.add_argument("--cycles", type=int, default=0, help="Number of pulses; 0 means run until the wait state clears")
+    codex_wait_layout_parser.add_argument("--sleep-seconds", type=float, default=20.0)
+
+    no_mod_codex_wait_layout_parser = subparsers.add_parser(
+        "run-no-mod-codex-wait-layout-loop",
+        help="No-custom-mod variant of the Codex wait layout loop",
+    )
+    no_mod_codex_wait_layout_parser.add_argument("--objective", default="launch_rocket_program")
+    no_mod_codex_wait_layout_parser.add_argument("--cycles", type=int, default=0, help="Number of pulses; 0 means run until the wait state clears")
+    no_mod_codex_wait_layout_parser.add_argument("--sleep-seconds", type=float, default=20.0)
+
     web_parser = subparsers.add_parser("web", help="Serve the Factorio production monitor at /factorio")
     web_parser.add_argument("--host", default="0.0.0.0")
     web_parser.add_argument("--port", type=int, default=18889)
@@ -733,6 +749,30 @@ def main(argv: list[str] | None = None) -> None:
             cycles=args.cycles,
             sleep_seconds=args.sleep_seconds,
             continue_on_error=not args.stop_on_error,
+        )
+        payload = summary.to_dict()
+        payload["adapter"] = "no-mod-rcon-lua"
+        print_json(payload)
+        if not summary.ok:
+            raise SystemExit(1)
+        return
+
+    if args.command == "run-codex-wait-layout-loop":
+        summary = FactorioController(cfg).run_codex_wait_layout_loop(
+            objective=args.objective,
+            cycles=args.cycles,
+            sleep_seconds=args.sleep_seconds,
+        )
+        print_json(summary.to_dict())
+        if not summary.ok:
+            raise SystemExit(1)
+        return
+
+    if args.command == "run-no-mod-codex-wait-layout-loop":
+        summary = ModlessFactorioController(cfg).run_codex_wait_layout_loop(
+            objective=args.objective,
+            cycles=args.cycles,
+            sleep_seconds=args.sleep_seconds,
         )
         payload = summary.to_dict()
         payload["adapter"] = "no-mod-rcon-lua"
