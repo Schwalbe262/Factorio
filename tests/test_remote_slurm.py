@@ -65,6 +65,34 @@ class RemoteSlurmTests(unittest.TestCase):
         self.assertTrue(remediation["required_gpu_allocation"]["needed"])
         self.assertIn("SUPERCOMPUTER_WORKER_GPUS_PER_NODE=1", remediation["required_gpu_allocation"]["auto_worker_env"])
 
+    def test_llm_status_remediation_marks_pending_gpu_allocation(self):
+        cfg = RemoteSlurmConfig(
+            enabled=True,
+            ssh_path="ssh",
+            scp_path="scp",
+            host="example",
+            user="user",
+            port=22,
+            key_path="key",
+            remote_dir="~/kakao-bot-worker",
+            job_name="AUTO",
+            conda_env="factorio-ai",
+            partition="gpu",
+            cpus_per_task=8,
+            gpus_per_node=3,
+            time_limit="24:00:00",
+            setup_timeout_seconds=60,
+            task_timeout_seconds=30,
+        )
+        remediation = _llm_status_remediation(
+            ["AUTO job pending GPU allocation", "GPU allocation"],
+            cfg,
+            False,
+            None,
+        )
+        self.assertIn("not allocated the requested GPUs yet", remediation["why"])
+        self.assertTrue(remediation["required_gpu_allocation"]["needed"])
+
     def test_gpu_allocation_visible_from_nvidia_or_slurm_env(self):
         self.assertTrue(_gpu_allocation_visible({"count": 1, "env": {}}))
         self.assertTrue(_gpu_allocation_visible({"count": 0, "env": {"SLURM_JOB_GPUS": "0"}}))

@@ -257,9 +257,34 @@ print(json.dumps({{
             f"""set -euo pipefail
 JOB_NAME={json.dumps(cfg.job_name)}
 INNER_COMMAND={shlex.quote(inner_command)}
-JOB_ID="$(squeue -h -u "$USER" -n "$JOB_NAME" -t R -o "%i" | head -1 | tr -d '[:space:]')"
+JOBS="$(squeue -h -u "$USER" -n "$JOB_NAME" -t R,PD -o "%i|%T|%M|%L|%R|%b|%S" || true)"
+JOB_ID="$(printf '%s\\n' "$JOBS" | awk -F'|' '$2 == "RUNNING" {{print $1; exit}}' | tr -d '[:space:]')"
 if [[ -z "$JOB_ID" ]]; then
-  echo "{{\\"job_running\\":false}}"
+  FACTORIO_AI_SLURM_JOBS="$JOBS" python3 - <<'PY'
+import json
+import os
+
+jobs = []
+for line in os.environ.get("FACTORIO_AI_SLURM_JOBS", "").splitlines():
+    parts = line.split("|")
+    if len(parts) >= 6:
+        jobs.append({{
+            "id": parts[0],
+            "state": parts[1],
+            "elapsed": parts[2],
+            "time_left": parts[3],
+            "reason": parts[4],
+            "gres": parts[5],
+            "start_time": parts[6] if len(parts) > 6 else "",
+        }})
+pending_jobs = [job for job in jobs if job.get("state") == "PENDING"]
+print(json.dumps({{
+    "job_running": False,
+    "job_pending": bool(pending_jobs),
+    "jobs": jobs,
+    "pending_jobs": pending_jobs,
+}}, separators=(",", ":")))
+PY
   exit 0
 fi
 srun --jobid="$JOB_ID" --overlap -N1 -n1 -c1 bash -lc "$INNER_COMMAND" < /dev/null
@@ -291,7 +316,11 @@ srun --jobid="$JOB_ID" --overlap -N1 -n1 -c1 bash -lc "$INNER_COMMAND" < /dev/nu
             remote_payload.update(parsed)
             break
     if remote_payload.get("job_running") is False:
-        missing = ["running AUTO job with LLM env"]
+        missing = (
+            ["AUTO job pending GPU allocation", "GPU allocation"]
+            if remote_payload.get("job_pending")
+            else ["running AUTO job with LLM env"]
+        )
         return {
             "ok": True,
             "remoteDir": remote_dir,
@@ -334,15 +363,22 @@ def _llm_status_remediation(
     if not missing:
         return None
     gpu = gpu or {}
-    return {
-        "why": (
+    if "AUTO job pending GPU allocation" in missing:
+        why = (
+            "AUTO Slurm job is submitted, but Slurm has not allocated the requested GPUs yet. "
+            "The local LLM endpoint will only be available after that pending job starts."
+        )
+    else:
+        why = (
             "AUTO Slurm allocation exists, but strategy requests cannot use a local LLM until "
             "the LLM endpoint variables, Factorio AI code, and GPU allocation are visible inside the attached job."
-        ),
+        )
+    return {
+        "why": why,
         "required_remote_env": ["FACTORIO_AI_LLM_BASE_URL", "FACTORIO_AI_LLM_MODEL"],
         "optional_remote_env": ["FACTORIO_AI_LLM_API_KEY", "FACTORIO_AI_LLM_GUIDED_JSON", "FACTORIO_AI_LLM_TIMEOUT"],
         "required_gpu_allocation": {
-            "needed": "GPU allocation" in missing,
+            "needed": "GPU allocation" in missing or "AUTO job pending GPU allocation" in missing,
             "current": gpu,
             "auto_worker_env": [
                 "SUPERCOMPUTER_WORKER_GPUS_PER_NODE=1",
