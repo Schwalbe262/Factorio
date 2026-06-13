@@ -702,6 +702,44 @@ local function can_place_manual(surface, force, name, position, direction)
   })
 end
 
+local function nearest_resource_name(surface, position, radius)
+  local resources = surface.find_entities_filtered({
+    position = position,
+    radius = radius or 4,
+    type = "resource",
+    limit = 80
+  })
+  local nearest = nil
+  local nearest_distance = nil
+  for _, resource in pairs(resources) do
+    if resource.valid then
+      local resource_distance = distance(position, resource.position)
+      if not nearest or resource_distance < nearest_distance then
+        nearest = resource
+        nearest_distance = resource_distance
+      end
+    end
+  end
+  return nearest and nearest.name or nil
+end
+
+local function build_candidate_valid(surface, force, action, position, direction)
+  if not surface.can_place_entity({
+    name = action.name,
+    position = position,
+    direction = direction,
+    force = force,
+    build_check_type = defines.build_check_type.manual
+  }) then
+    return false
+  end
+  if action.required_resource then
+    local resource_name = nearest_resource_name(surface, position, action.required_resource_radius or 4)
+    return resource_name == action.required_resource
+  end
+  return true
+end
+
 local function west_power_layout(position)
   return {
     offshore_pump = {
@@ -1477,26 +1515,14 @@ local function action_build(agent, action)
   local direction = action.direction or defines.direction.north
   local surface = agent.surface
   local place_position = position
-  if not surface.can_place_entity({
-    name = action.name,
-    position = place_position,
-    direction = direction,
-    force = agent.force,
-    build_check_type = defines.build_check_type.manual
-  }) then
+  if not build_candidate_valid(surface, agent.force, action, place_position, direction) then
     if action.allow_nearby then
       local found = nil
       for radius = 1, 8 do
         for dx = -radius, radius do
           for dy = -radius, radius do
             local candidate = { x = position.x + dx, y = position.y + dy }
-            if surface.can_place_entity({
-              name = action.name,
-              position = candidate,
-              direction = direction,
-              force = agent.force,
-              build_check_type = defines.build_check_type.manual
-            }) then
+            if build_candidate_valid(surface, agent.force, action, candidate, direction) then
               found = candidate
               break
             end
@@ -1512,10 +1538,18 @@ local function action_build(agent, action)
       if found then
         place_position = found
       else
-        return result_err("cannot place entity", { name = action.name, position = position_table(position) })
+        return result_err("cannot place entity", {
+          name = action.name,
+          position = position_table(position),
+          required_resource = action.required_resource
+        })
       end
     else
-      return result_err("cannot place entity", { name = action.name, position = position_table(position) })
+      return result_err("cannot place entity", {
+        name = action.name,
+        position = position_table(position),
+        required_resource = action.required_resource
+      })
     end
   end
   inventory.remove({ name = action.name, count = 1 })

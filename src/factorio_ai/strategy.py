@@ -10,6 +10,15 @@ from .models import entities_named, entity_item_count, inventory_count, total_it
 
 KOREAN_ELECTRONIC_CIRCUIT = "\uc804\uc790\ud68c\ub85c"
 KOREAN_ROCKET = "\ub85c\ucf13"
+BUILD_ITEM_MALL_ITEMS = [
+    "transport-belt",
+    "inserter",
+    "burner-inserter",
+    "burner-mining-drill",
+    "stone-furnace",
+    "small-electric-pole",
+    "assembling-machine-1",
+]
 
 
 @dataclass(frozen=True)
@@ -150,6 +159,25 @@ SKILL_CATALOG: dict[str, SkillContract] = {
             "Executor validates exact assembler, belt, inserter, and pole placement."
         ),
     ),
+    "bootstrap_build_item_mall": SkillContract(
+        name="bootstrap_build_item_mall",
+        description="Automate recurring factory-expansion items such as belts, inserters, furnaces, drills, poles, and assemblers.",
+        executor="future BuildItemMallSkill",
+        preconditions=[
+            "automation researched",
+            "electric power available",
+            "iron plates, copper plates, gears, circuits, stone, and wood available or producible",
+            "site selected near the main bus or starter factory with room for chests/belts",
+        ],
+        completion=[
+            "core build items are produced by assemblers or dedicated furnace/drill supply loops",
+            "expansion no longer depends on hand-crafting every belt, inserter, furnace, or assembler",
+        ],
+        llm_scope=(
+            "Choose which build items need mall automation and where the mall belongs. "
+            "Executor handles exact assembler recipes, inserter/chest placement, belts, power, and resource validation."
+        ),
+    ),
     "build_starter_defense": SkillContract(
         name="build_starter_defense",
         description="Build early defenses when enemy units, spawners, or worms threaten the starter factory.",
@@ -230,6 +258,7 @@ def make_strategy_payload(
         "production_targets": dict(sorted((production_targets or {}).items())),
         "factory_monitor": monitor,
         "spatial_planning": make_spatial_planning_context(observation),
+        "build_item_supply": make_build_item_supply_context(observation, monitor),
         "threats": make_threat_context(observation),
         "goal_dependency_tree": dependency_tree_for_objective(objective, max_depth=5),
         "available_skills": skill_catalog_payload(),
@@ -238,6 +267,42 @@ def make_strategy_payload(
             "For spatial work, choose districts, corridors, or rail topology only. "
             "Do not emit tile-level movement, mining, building, rail, or signal actions."
         ),
+    }
+
+
+def make_build_item_supply_context(observation: dict[str, Any], monitor: dict[str, Any] | None = None) -> dict[str, Any]:
+    production_rows = monitor.get("production") if isinstance(monitor, dict) and isinstance(monitor.get("production"), list) else []
+    production_by_item = {
+        str(row.get("item")): float(row.get("per_minute") or 0.0)
+        for row in production_rows
+        if isinstance(row, dict)
+    }
+    items = []
+    for item in BUILD_ITEM_MALL_ITEMS:
+        stock = total_item_count(observation, item)
+        estimated = production_by_item.get(item, 0.0)
+        items.append(
+            {
+                "item": item,
+                "stock": stock,
+                "estimated_per_minute": estimated,
+                "automated": estimated > 0.0,
+                "needs_mall": stock < _build_item_stock_floor(item) and estimated <= 0.0,
+            }
+        )
+    return {
+        "llm_responsibility": (
+            "Decide when expansion is limited by build-item supply instead of raw plates, "
+            "and choose which mall items should be automated first."
+        ),
+        "executor_responsibility": "Build exact assembler/chest/belt/power layouts only through validated skills.",
+        "items": items,
+        "recommended_skill": "bootstrap_build_item_mall" if any(item["needs_mall"] for item in items) else None,
+        "constraints": [
+            "do not keep hand-crafting common expansion items once automation and power are available",
+            "place build-item production close to iron/circuit supply and future logistics corridors",
+            "reserve room for belts, inserters, chests, assemblers, and later provider/requester logistics",
+        ],
     }
 
 
@@ -629,3 +694,15 @@ def _danger_level(nearest_distance: float | None) -> str:
     if nearest_distance <= 192:
         return "medium"
     return "low"
+
+
+def _build_item_stock_floor(item: str) -> int:
+    return {
+        "transport-belt": 50,
+        "inserter": 20,
+        "burner-inserter": 10,
+        "burner-mining-drill": 5,
+        "stone-furnace": 10,
+        "small-electric-pole": 20,
+        "assembling-machine-1": 10,
+    }.get(item, 5)

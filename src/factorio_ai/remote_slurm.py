@@ -213,6 +213,7 @@ srun --jobid="$JOB_ID" --overlap -N1 -n1 -c1 bash -lc "$INNER_COMMAND" < /dev/nu
             "remote": {"job_running": False, "error": f"{type(exc).__name__}: {exc}"},
             "llm_ready": False,
             "missing": ["running AUTO job with LLM env"],
+            "remediation": _llm_status_remediation(["running AUTO job with LLM env"], cfg, False),
         }
 
     remote_payload: dict[str, Any] = {"job_running": True}
@@ -240,6 +241,35 @@ srun --jobid="$JOB_ID" --overlap -N1 -n1 -c1 bash -lc "$INNER_COMMAND" < /dev/nu
         "remote": remote_payload,
         "llm_ready": not missing,
         "missing": missing,
+        "remediation": _llm_status_remediation(missing, cfg, bool(remote_payload.get("vllm_command"))),
+    }
+
+
+def _llm_status_remediation(
+    missing: list[str],
+    cfg: RemoteSlurmConfig,
+    vllm_available: bool,
+) -> dict[str, Any] | None:
+    if not missing:
+        return None
+    return {
+        "why": (
+            "AUTO Slurm allocation exists, but strategy requests cannot use an LLM until "
+            "FACTORIO_AI_LLM_BASE_URL and FACTORIO_AI_LLM_MODEL are visible inside the attached job."
+        ),
+        "required_remote_env": ["FACTORIO_AI_LLM_BASE_URL", "FACTORIO_AI_LLM_MODEL"],
+        "optional_remote_env": ["FACTORIO_AI_LLM_API_KEY", "FACTORIO_AI_LLM_GUIDED_JSON", "FACTORIO_AI_LLM_TIMEOUT"],
+        "vllm_available_in_job": vllm_available,
+        "example_existing_server": [
+            "export FACTORIO_AI_LLM_BASE_URL=http://127.0.0.1:8000/v1",
+            "export FACTORIO_AI_LLM_MODEL=<openai-compatible-model-name>",
+        ],
+        "example_vllm_worker": [
+            "export FACTORIO_AI_VLLM_MODEL=<huggingface-or-local-model>",
+            "factorio-ai slurm-start-worker",
+        ],
+        "remote_dir": cfg.remote_dir,
+        "job_name": cfg.job_name,
     }
 
 

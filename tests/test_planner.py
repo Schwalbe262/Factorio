@@ -89,6 +89,7 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["type"], "build")
         self.assertEqual(decision.action["name"], "burner-mining-drill")
         self.assertTrue(decision.action["allow_nearby"])
+        self.assertEqual(decision.action["required_resource"], "iron-ore")
 
     def test_moves_next_to_ore_before_building_distant_drill(self):
         obs = base_observation()
@@ -497,6 +498,21 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["type"], "mine")
         self.assertEqual(decision.action["name"], "coal")
 
+    def test_expand_smelting_stops_when_fuel_logistics_are_too_far(self):
+        obs = base_observation()
+        obs["inventory"] = {"coal": 0}
+        obs["resources"] = [
+            {"name": "copper-ore", "position": {"x": 4, "y": 0}, "distance": 4},
+            {"name": "coal", "position": {"x": 300, "y": 0}, "distance": 300},
+        ]
+        obs["entities"] = complete_belt_smelting_entities(4, 0, 500, resource="copper-ore", product="copper-plate")
+        for entity in obs["entities"]:
+            if entity["name"] == "burner-inserter":
+                entity["inventories"] = {}
+        decision = ExpandCopperSmeltingSkill(target_rate_per_minute=18).next_action(obs)
+        self.assertIsNone(decision.action)
+        self.assertIn("fuel logistics", decision.reason)
+
     def test_expand_iron_smelting_clears_blocking_rock(self):
         obs = base_observation()
         obs["inventory"] = {
@@ -562,6 +578,20 @@ class PlannerTests(unittest.TestCase):
         ]
         decision = ExpandCopperSmeltingSkill(target_rate_per_minute=37).next_action(obs)
         self.assertEqual(decision.action["position"], {"x": 10.0, "y": 0.0})
+
+    def test_expand_copper_smelting_requires_copper_for_new_drill(self):
+        obs = base_observation()
+        obs["inventory"] = {"coal": 12, "burner-mining-drill": 1}
+        obs["resources"] = [
+            {"name": "copper-ore", "position": {"x": 8, "y": 0}, "distance": 8},
+            {"name": "coal", "position": {"x": 2, "y": 0}, "distance": 2},
+        ]
+        obs["entities"] = complete_belt_smelting_entities(8, 0, 700, resource="copper-ore", product="copper-plate")
+        obs["entities"] = [entity for entity in obs["entities"] if entity["name"] != "burner-mining-drill"]
+        decision = ExpandCopperSmeltingSkill(target_rate_per_minute=37).next_action(obs)
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "burner-mining-drill")
+        self.assertEqual(decision.action["required_resource"], "copper-ore")
 
     def test_starter_defense_places_turret_toward_nearest_enemy(self):
         obs = base_observation()

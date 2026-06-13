@@ -105,6 +105,7 @@ class StrategyTests(unittest.TestCase):
         self.assertTrue(any(item["name"] == "expand_copper_smelting" for item in catalog))
         self.assertTrue(any(item["name"] == "research_automation" for item in catalog))
         self.assertTrue(any(item["name"] == "automate_electronic_circuit_line" for item in catalog))
+        self.assertTrue(any(item["name"] == "bootstrap_build_item_mall" for item in catalog))
         self.assertTrue(any(item["name"] == "research_logistics" for item in catalog))
         self.assertTrue(any(item["name"] == "build_starter_defense" for item in catalog))
         self.assertTrue(any(item["name"] == "build_rail_supply_line" for item in catalog))
@@ -135,6 +136,21 @@ class StrategyTests(unittest.TestCase):
             payload["spatial_planning"]["rail_network"]["planning_inputs"]["known_remote_resources"][0]["name"],
             "iron-ore",
         )
+
+    def test_strategy_payload_exposes_build_item_supply_context(self):
+        payload = make_strategy_payload(
+            "launch_rocket_program",
+            {
+                "inventory": {"iron-plate": 100, "copper-plate": 100},
+                "entities": [],
+                "resources": [],
+            },
+        )
+        supply = payload["build_item_supply"]
+        self.assertEqual(supply["recommended_skill"], "bootstrap_build_item_mall")
+        items = {item["item"]: item for item in supply["items"]}
+        self.assertTrue(items["transport-belt"]["needs_mall"])
+        self.assertTrue(items["assembling-machine-1"]["needs_mall"])
 
     def test_strategy_payload_exposes_enemy_threat_context(self):
         payload = make_strategy_payload(

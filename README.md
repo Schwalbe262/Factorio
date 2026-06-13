@@ -285,6 +285,17 @@ The strategic payload summarizes nearest enemy distance, spawner/turret presence
 and a danger level. Close hostile pressure selects `build_starter_defense` before blindly expanding
 production toward nests.
 
+## Build Item Mall
+
+Scaling to rockets requires automating expansion items, not just plates. The strategy payload exposes
+`build_item_supply` for belts, inserters, burner inserters, burner drills, stone furnaces, small poles,
+and assembling machines. LLM strategy can select `bootstrap_build_item_mall` when the factory is
+blocked by hand-crafted build items. The executor for that skill is still pending; until then, missing
+selection is logged for Codex implementation.
+
+Resource-specific miner placement is validated with `required_resource` so a copper expansion drill
+cannot silently slide onto iron ore when `allow_nearby` is used.
+
 ## Learning Loop
 
 The model should improve over time instead of relying only on a commercial LLM forever.

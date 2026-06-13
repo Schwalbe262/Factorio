@@ -22,6 +22,7 @@ EAST = 4
 SOUTH = 8
 WEST = 12
 FURNACE_RESOURCE_RADIUS = 12.0
+WALK_FUEL_LOGISTICS_LIMIT = 160.0
 
 
 class IronPlateSkill:
@@ -106,6 +107,7 @@ class IronPlateSkill:
                     "position": iron_pos,
                     "direction": EAST,
                     "allow_nearby": True,
+                    "required_resource": "iron-ore",
                 },
                 "place burner mining drill on iron ore",
             )
@@ -540,6 +542,8 @@ class BeltSmeltingLineSkill:
                 "position": position,
                 "allow_nearby": name in {"burner-mining-drill", "stone-furnace"},
             }
+            if name == "burner-mining-drill":
+                action["required_resource"] = self.resource_name
             direction = layout.get(direction_key) if direction_key else None
             if direction is not None:
                 action["direction"] = direction
@@ -552,12 +556,14 @@ class BeltSmeltingLineSkill:
         ]:
             entity = layout.get(_entity_key(entity_name))
             if entity and entity_item_count(entity, item) < threshold:
+                position = _position(entity)
                 if inventory_count(observation, item) <= 0:
-                    coal = nearest_resource(observation, "coal")
+                    coal = _nearest_resource_to_position(observation, position, "coal")
                     if coal is None:
                         return PlannerDecision(None, "cannot find coal for burner smelting line")
+                    if distance(position, _position(coal)) > WALK_FUEL_LOGISTICS_LIMIT:
+                        return PlannerDecision(None, "burner smelting line needs fuel logistics before more walking refuels")
                     return self.support_skill._mine_resource(player, coal, "coal", 16)
-                position = _position(entity)
                 if distance(player, position) > 20:
                     return PlannerDecision(
                         {"type": "move_to", "position": position},
@@ -731,6 +737,8 @@ class _ExpandPlateSmeltingSkill:
                 "position": position,
                 "allow_nearby": name in {"burner-mining-drill", "stone-furnace"},
             }
+            if name == "burner-mining-drill":
+                action["required_resource"] = self.resource_name
             direction = layout.get(direction_key) if direction_key else None
             if direction is not None:
                 action["direction"] = direction
@@ -743,12 +751,17 @@ class _ExpandPlateSmeltingSkill:
         ]:
             entity = layout.get(_entity_key(entity_name))
             if entity and entity_item_count(entity, item) < threshold:
+                position = _position(entity)
                 if inventory_count(observation, item) <= 0:
-                    coal = nearest_resource(observation, "coal")
+                    coal = _nearest_resource_to_position(observation, position, "coal")
                     if coal is None:
                         return PlannerDecision(None, f"cannot find coal for expanded {self.product_name} smelting")
+                    if distance(position, _position(coal)) > WALK_FUEL_LOGISTICS_LIMIT:
+                        return PlannerDecision(
+                            None,
+                            f"expanded {self.product_name} smelting needs fuel logistics before more walking refuels",
+                        )
                     return self.line_skill.support_skill._mine_resource(player, coal, "coal", 16)
-                position = _position(entity)
                 if distance(player, position) > 20:
                     return PlannerDecision(
                         {"type": "move_to", "position": position},
@@ -1123,6 +1136,18 @@ def _nearest_to(entities: list[dict[str, Any]], position: dict[str, float]) -> d
     if not entities:
         return None
     return min(entities, key=lambda item: distance(_position(item), position))
+
+
+def _nearest_resource_to_position(
+    observation: dict[str, Any],
+    position: dict[str, float],
+    resource_name: str,
+) -> dict[str, Any] | None:
+    resources = observation.get("resources")
+    if not isinstance(resources, list):
+        return None
+    candidates = [item for item in resources if isinstance(item, dict) and item.get("name") == resource_name]
+    return _nearest_to(candidates, position) if candidates else None
 
 
 def _nearest_observed_enemy(observation: dict[str, Any]) -> dict[str, Any] | None:

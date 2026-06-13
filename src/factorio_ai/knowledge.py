@@ -33,6 +33,19 @@ RECIPES: dict[str, Recipe] = {
     "stone-brick": Recipe("stone-brick", 3.2, {"stone": 2}, {"stone-brick": 1}),
     "iron-gear-wheel": Recipe("iron-gear-wheel", 0.5, {"iron-plate": 2}, {"iron-gear-wheel": 1}),
     "copper-cable": Recipe("copper-cable", 0.5, {"copper-plate": 1}, {"copper-cable": 2}),
+    "stone-furnace": Recipe("stone-furnace", 0.5, {"stone": 5}, {"stone-furnace": 1}),
+    "burner-mining-drill": Recipe(
+        "burner-mining-drill",
+        2.0,
+        {"iron-plate": 3, "stone": 5, "iron-gear-wheel": 3},
+        {"burner-mining-drill": 1},
+    ),
+    "burner-inserter": Recipe(
+        "burner-inserter",
+        0.5,
+        {"iron-plate": 1, "iron-gear-wheel": 1},
+        {"burner-inserter": 1},
+    ),
     "electronic-circuit": Recipe(
         "electronic-circuit",
         0.5,
@@ -51,6 +64,19 @@ RECIPES: dict[str, Recipe] = {
         0.5,
         {"electronic-circuit": 1, "iron-gear-wheel": 1, "iron-plate": 1},
         {"inserter": 1},
+    ),
+    "small-electric-pole": Recipe(
+        "small-electric-pole",
+        0.5,
+        {"wood": 1, "copper-cable": 2},
+        {"small-electric-pole": 2},
+    ),
+    "assembling-machine-1": Recipe(
+        "assembling-machine-1",
+        0.5,
+        {"electronic-circuit": 3, "iron-gear-wheel": 5, "iron-plate": 9},
+        {"assembling-machine-1": 1},
+        technology="automation",
     ),
     "logistic-science-pack": Recipe(
         "logistic-science-pack",
@@ -184,7 +210,7 @@ OBJECTIVE_ROOTS = {
 }
 
 
-RAW_RESOURCES = {"iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water"}
+RAW_RESOURCES = {"iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water", "wood"}
 
 
 def objective_roots(objective: str) -> list[str]:
