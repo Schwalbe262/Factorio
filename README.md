@@ -495,8 +495,20 @@ Common environment variables:
 - `SUPERCOMPUTER_WORKER_SSH_PORT`
 - `SUPERCOMPUTER_WORKER_REMOTE_DIR`
 - `FACTORIO_AI_SLURM_ENABLED=1`
+- `FACTORIO_AI_SLURM_GPUS_PER_NODE=1`
+- `FACTORIO_AI_VLLM_MODEL=Qwen/Qwen3.5-4B`
 - `FACTORIO_AI_LLM_BASE_URL=http://127.0.0.1:8000/v1`
 - `FACTORIO_AI_LLM_MODEL=<model-name>`
+
+When reusing the Kakao `AUTO` worker allocation, open future AUTO jobs with GPU GRES enabled:
+
+```powershell
+$env:SUPERCOMPUTER_WORKER_GPUS_PER_NODE="1"
+$env:SUPERCOMPUTER_WORKER_GRES="gpu:1"
+```
+
+If the AUTO job is already running without GPU allocation, it must be replaced before local vLLM can
+use CUDA. `slurm-llm-status` reports this as `GPU allocation` in `missing`.
 
 Submit a test task:
 
@@ -511,7 +523,9 @@ factorio-ai slurm-llm-status
 ```
 
 `slurm-status` only proves that the allocation exists. `slurm-llm-status` checks whether
-`FACTORIO_AI_LLM_BASE_URL` and `FACTORIO_AI_LLM_MODEL` are visible inside the attached Slurm task.
+`FACTORIO_AI_LLM_BASE_URL` and `FACTORIO_AI_LLM_MODEL` are visible inside the attached Slurm task,
+whether `nvidia-smi -L` sees a GPU, and whether the Factorio AI code has been deployed under the
+remote worker directory.
 
 ## GitHub Workflow
 

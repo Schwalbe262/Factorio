@@ -31,6 +31,18 @@ LLM_ENV_VARS = (
     "FACTORIO_AI_LLM_GUIDED_JSON",
     "FACTORIO_AI_LLM_TIMEOUT",
 )
+VLLM_ENV_VARS = (
+    "FACTORIO_AI_VLLM_MODEL",
+    "FACTORIO_AI_VLLM_PORT",
+    "FACTORIO_AI_VLLM_ARGS",
+    "FACTORIO_AI_VLLM_STARTUP_SECONDS",
+)
+GPU_ENV_VARS = (
+    "CUDA_VISIBLE_DEVICES",
+    "SLURM_JOB_GPUS",
+    "SLURM_STEP_GPUS",
+    "SLURM_GPUS_ON_NODE",
+)
 
 
 class RemoteSlurmError(RuntimeError):
@@ -72,7 +84,7 @@ def config() -> RemoteSlurmConfig:
         conda_env=os.getenv("FACTORIO_AI_SLURM_CONDA_ENV") or DEFAULT_CONDA_ENV,
         partition=os.getenv("FACTORIO_AI_SLURM_PARTITION") or "gpu4,gpu3,gpu2,gpu1,cpu2,cpu1",
         cpus_per_task=_int_env("FACTORIO_AI_SLURM_CPUS_PER_TASK", 8, 1),
-        gpus_per_node=min(3, _int_env("FACTORIO_AI_SLURM_GPUS_PER_NODE", 0, 0)),
+        gpus_per_node=min(3, _int_env("FACTORIO_AI_SLURM_GPUS_PER_NODE", 1, 0)),
         time_limit=os.getenv("FACTORIO_AI_SLURM_TIME") or "24:00:00",
         setup_timeout_seconds=_int_env("FACTORIO_AI_SLURM_SETUP_TIMEOUT_SECONDS", 1800, 60),
         task_timeout_seconds=_int_env("FACTORIO_AI_SLURM_TASK_TIMEOUT_SECONDS", 300, 5),
@@ -162,7 +174,7 @@ def status(cfg: RemoteSlurmConfig | None = None) -> dict[str, Any]:
 JOB_NAME={json.dumps(cfg.job_name)}
 REMOTE_DIR={json.dumps(remote_dir)}
 echo "--- jobs ---"
-squeue -h -u "$USER" -n "$JOB_NAME" -t R,PD -o "%i|%T|%M|%L|%R" || true
+squeue -h -u "$USER" -n "$JOB_NAME" -t R,PD -o "%i|%T|%M|%L|%R|%b" || true
 echo "--- counts ---"
 for d in queue running results failed logs; do
   mkdir -p "$REMOTE_DIR/$d"
@@ -183,16 +195,53 @@ def llm_status(cfg: RemoteSlurmConfig | None = None) -> dict[str, Any]:
     cfg = cfg or config()
     remote_dir = resolve_remote_dir(cfg)
     local_env = _llm_env_presence(os.environ)
-    probe_code = (
-        "import json, os, shutil; "
-        f"names = {json.dumps(list(LLM_ENV_VARS))}; "
-        "env = {name: bool(os.getenv(name)) for name in names}; "
-        "print(json.dumps({'env': env, 'vllm_command': shutil.which('vllm') is not None}, separators=(',', ':')))"
-    )
+    probe_code = f"""
+import json
+import os
+import shutil
+import subprocess
+
+env_names = {json.dumps(list(LLM_ENV_VARS + VLLM_ENV_VARS))}
+gpu_env_names = {json.dumps(list(GPU_ENV_VARS))}
+safe_value_names = {json.dumps(["FACTORIO_AI_LLM_BASE_URL", "FACTORIO_AI_LLM_MODEL", "FACTORIO_AI_VLLM_MODEL", "FACTORIO_AI_VLLM_PORT"])}
+factorio_ai_path = {json.dumps(remote_dir + "/factorio-ai")}
+
+env = {{name: bool(os.getenv(name)) for name in env_names}}
+env_values = {{name: os.getenv(name, "") for name in safe_value_names}}
+gpu_env = {{name: os.getenv(name, "") for name in gpu_env_names}}
+nvidia_smi = shutil.which("nvidia-smi")
+gpu_output = ""
+gpu_error = ""
+gpu_count = 0
+if nvidia_smi:
+    try:
+        proc = subprocess.run([nvidia_smi, "-L"], text=True, capture_output=True, timeout=10, check=False)
+        gpu_output = proc.stdout.strip()
+        gpu_error = proc.stderr.strip()
+        gpu_count = sum(1 for line in gpu_output.splitlines() if line.strip().startswith("GPU "))
+    except Exception as exc:
+        gpu_error = f"{{type(exc).__name__}}: {{exc}}"
+
+print(json.dumps({{
+    "env": env,
+    "env_values": env_values,
+    "vllm_command": shutil.which("vllm") is not None,
+    "factorio_ai_deployed": os.path.isdir(factorio_ai_path),
+    "gpu": {{
+        "env": gpu_env,
+        "nvidia_smi": bool(nvidia_smi),
+        "count": gpu_count,
+        "output": gpu_output,
+        "error": gpu_error,
+    }},
+}}, separators=(",", ":")))
+"""
+    encoded_probe = base64.b64encode(probe_code.encode("utf-8")).decode("ascii")
+    probe_runner = f"import base64; exec(base64.b64decode({encoded_probe!r}))"
     inner_command = (
         "set -euo pipefail; "
         f"{_attached_env_setup()}"
-        f"python3 -c {shlex.quote(probe_code)}"
+        f"python3 -c {shlex.quote(probe_runner)}"
     )
     try:
         output = _run_remote(
@@ -217,7 +266,7 @@ srun --jobid="$JOB_ID" --overlap -N1 -n1 -c1 bash -lc "$INNER_COMMAND" < /dev/nu
             "remote": {"job_running": False, "error": f"{type(exc).__name__}: {exc}"},
             "llm_ready": False,
             "missing": ["running AUTO job with LLM env"],
-            "remediation": _llm_status_remediation(["running AUTO job with LLM env"], cfg, False),
+            "remediation": _llm_status_remediation(["running AUTO job with LLM env"], cfg, False, None),
         }
 
     remote_payload: dict[str, Any] = {"job_running": True}
@@ -232,12 +281,30 @@ srun --jobid="$JOB_ID" --overlap -N1 -n1 -c1 bash -lc "$INNER_COMMAND" < /dev/nu
         if isinstance(parsed, dict):
             remote_payload.update(parsed)
             break
+    if remote_payload.get("job_running") is False:
+        missing = ["running AUTO job with LLM env"]
+        return {
+            "ok": True,
+            "remoteDir": remote_dir,
+            "local_env": local_env,
+            "remote": remote_payload,
+            "llm_ready": False,
+            "missing": missing,
+            "remediation": _llm_status_remediation(missing, cfg, False, None),
+        }
     remote_env = remote_payload.get("env") if isinstance(remote_payload.get("env"), dict) else {}
     missing = [
         name
         for name in ("FACTORIO_AI_LLM_BASE_URL", "FACTORIO_AI_LLM_MODEL")
         if not remote_env.get(name)
     ]
+    env_values = remote_payload.get("env_values") if isinstance(remote_payload.get("env_values"), dict) else {}
+    gpu = remote_payload.get("gpu") if isinstance(remote_payload.get("gpu"), dict) else {}
+    needs_local_gpu = _status_needs_local_gpu(env_values)
+    if needs_local_gpu and not _gpu_allocation_visible(gpu):
+        missing.append("GPU allocation")
+    if not remote_payload.get("factorio_ai_deployed"):
+        missing.append("Factorio AI deployment")
     return {
         "ok": True,
         "remoteDir": remote_dir,
@@ -245,7 +312,7 @@ srun --jobid="$JOB_ID" --overlap -N1 -n1 -c1 bash -lc "$INNER_COMMAND" < /dev/nu
         "remote": remote_payload,
         "llm_ready": not missing,
         "missing": missing,
-        "remediation": _llm_status_remediation(missing, cfg, bool(remote_payload.get("vllm_command"))),
+        "remediation": _llm_status_remediation(missing, cfg, bool(remote_payload.get("vllm_command")), gpu),
     }
 
 
@@ -253,28 +320,74 @@ def _llm_status_remediation(
     missing: list[str],
     cfg: RemoteSlurmConfig,
     vllm_available: bool,
+    gpu: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
     if not missing:
         return None
+    gpu = gpu or {}
     return {
         "why": (
-            "AUTO Slurm allocation exists, but strategy requests cannot use an LLM until "
-            "FACTORIO_AI_LLM_BASE_URL and FACTORIO_AI_LLM_MODEL are visible inside the attached job."
+            "AUTO Slurm allocation exists, but strategy requests cannot use a local LLM until "
+            "the LLM endpoint variables, Factorio AI code, and GPU allocation are visible inside the attached job."
         ),
         "required_remote_env": ["FACTORIO_AI_LLM_BASE_URL", "FACTORIO_AI_LLM_MODEL"],
         "optional_remote_env": ["FACTORIO_AI_LLM_API_KEY", "FACTORIO_AI_LLM_GUIDED_JSON", "FACTORIO_AI_LLM_TIMEOUT"],
+        "required_gpu_allocation": {
+            "needed": "GPU allocation" in missing,
+            "current": gpu,
+            "auto_worker_env": [
+                "SUPERCOMPUTER_WORKER_GPUS_PER_NODE=1",
+                "SUPERCOMPUTER_WORKER_GRES=gpu:1",
+            ],
+            "factorio_worker_env": ["FACTORIO_AI_SLURM_GPUS_PER_NODE=1"],
+            "sbatch_option": "--gres=gpu:1",
+        },
+        "required_deployment": {
+            "needed": "Factorio AI deployment" in missing,
+            "command": "factorio-ai slurm-deploy",
+        },
         "vllm_available_in_job": vllm_available,
         "example_existing_server": [
             "export FACTORIO_AI_LLM_BASE_URL=http://127.0.0.1:8000/v1",
             "export FACTORIO_AI_LLM_MODEL=<openai-compatible-model-name>",
         ],
         "example_vllm_worker": [
+            "export FACTORIO_AI_SLURM_GPUS_PER_NODE=1",
             "export FACTORIO_AI_VLLM_MODEL=<huggingface-or-local-model>",
             "factorio-ai slurm-start-worker",
+        ],
+        "example_auto_reopen": [
+            "export SUPERCOMPUTER_WORKER_GPUS_PER_NODE=1",
+            "export SUPERCOMPUTER_WORKER_GRES=gpu:1",
+            "/worker start",
         ],
         "remote_dir": cfg.remote_dir,
         "job_name": cfg.job_name,
     }
+
+
+def _status_needs_local_gpu(env_values: dict[str, Any]) -> bool:
+    if env_values.get("FACTORIO_AI_VLLM_MODEL"):
+        return True
+    base_url = str(env_values.get("FACTORIO_AI_LLM_BASE_URL") or "").lower()
+    if not base_url:
+        return True
+    return "127.0.0.1" in base_url or "localhost" in base_url
+
+
+def _gpu_allocation_visible(gpu: dict[str, Any]) -> bool:
+    try:
+        count = int(gpu.get("count") or 0)
+    except (TypeError, ValueError):
+        count = 0
+    if count > 0:
+        return True
+    env = gpu.get("env") if isinstance(gpu.get("env"), dict) else {}
+    for name in ("SLURM_JOB_GPUS", "SLURM_STEP_GPUS", "SLURM_GPUS_ON_NODE"):
+        if str(env.get(name) or "").strip():
+            return True
+    cuda_visible = str(env.get("CUDA_VISIBLE_DEVICES") or "").strip().lower()
+    return bool(cuda_visible and cuda_visible not in {"none", "no_dev_files", "-1"})
 
 
 def cancel(cfg: RemoteSlurmConfig | None = None) -> dict[str, Any]:
@@ -581,15 +694,21 @@ def _int_env(name: str, fallback: int, minimum: int = 0) -> int:
 
 
 def _llm_env_presence(env: Any) -> dict[str, bool]:
-    return {name: bool(env.get(name)) for name in LLM_ENV_VARS}
+    return {name: bool(env.get(name)) for name in LLM_ENV_VARS + VLLM_ENV_VARS}
 
 
 def _attached_env_setup() -> str:
     commands = []
-    for name in LLM_ENV_VARS:
+    for name in LLM_ENV_VARS + VLLM_ENV_VARS:
         value = os.getenv(name)
         if value:
             commands.append(f"export {name}={shlex.quote(value)}")
+    vllm_model = os.getenv("FACTORIO_AI_VLLM_MODEL")
+    if vllm_model and not os.getenv("FACTORIO_AI_LLM_MODEL"):
+        commands.append(f"export FACTORIO_AI_LLM_MODEL={shlex.quote(vllm_model)}")
+    if vllm_model and not os.getenv("FACTORIO_AI_LLM_BASE_URL"):
+        port = os.getenv("FACTORIO_AI_VLLM_PORT") or "8000"
+        commands.append(f"export FACTORIO_AI_LLM_BASE_URL={shlex.quote(f'http://127.0.0.1:{port}/v1')}")
     return ("; ".join(commands) + "; ") if commands else ""
 
 

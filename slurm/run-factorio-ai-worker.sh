@@ -35,27 +35,48 @@ if command -v conda >/dev/null 2>&1; then
   conda activate "$ENV_NAME"
 fi
 
+GPU_LIST=""
+GPU_ERROR=""
+if command -v nvidia-smi >/dev/null 2>&1; then
+  GPU_LIST="$(nvidia-smi -L 2>/dev/null || true)"
+  if [[ -z "$GPU_LIST" ]]; then
+    GPU_ERROR="$(nvidia-smi -L 2>&1 >/dev/null || true)"
+  fi
+else
+  GPU_ERROR="nvidia-smi not found"
+fi
+
 if [[ -n "${FACTORIO_AI_VLLM_MODEL:-}" ]]; then
   VLLM_PORT="${FACTORIO_AI_VLLM_PORT:-8000}"
   export FACTORIO_AI_LLM_BASE_URL="${FACTORIO_AI_LLM_BASE_URL:-http://127.0.0.1:${VLLM_PORT}/v1}"
   export FACTORIO_AI_LLM_MODEL="${FACTORIO_AI_LLM_MODEL:-$FACTORIO_AI_VLLM_MODEL}"
-  if command -v vllm >/dev/null 2>&1; then
-    vllm serve "$FACTORIO_AI_VLLM_MODEL" \
-      --host 127.0.0.1 \
-      --port "$VLLM_PORT" \
-      ${FACTORIO_AI_VLLM_ARGS:-} > "$ROOT/logs/vllm-${SLURM_JOB_ID:-local}.out" 2> "$ROOT/logs/vllm-${SLURM_JOB_ID:-local}.err" &
-    VLLM_PID="$!"
-    trap 'kill "$VLLM_PID" 2>/dev/null || true' EXIT
-    sleep "${FACTORIO_AI_VLLM_STARTUP_SECONDS:-30}"
-  else
-    echo "vllm_not_found=1"
+  if [[ -z "$GPU_LIST" ]]; then
+    echo "vllm_gpu_unavailable=1"
+    echo "gpu_error=$GPU_ERROR"
+    exit 2
   fi
+  if ! command -v vllm >/dev/null 2>&1; then
+    echo "vllm_not_found=1"
+    exit 2
+  fi
+  vllm serve "$FACTORIO_AI_VLLM_MODEL" \
+    --host 127.0.0.1 \
+    --port "$VLLM_PORT" \
+    ${FACTORIO_AI_VLLM_ARGS:-} > "$ROOT/logs/vllm-${SLURM_JOB_ID:-local}.out" 2> "$ROOT/logs/vllm-${SLURM_JOB_ID:-local}.err" &
+  VLLM_PID="$!"
+  trap 'kill "$VLLM_PID" 2>/dev/null || true' EXIT
+  sleep "${FACTORIO_AI_VLLM_STARTUP_SECONDS:-30}"
 fi
 
 echo "job_name=${SLURM_JOB_NAME:-factorio-ai-worker}"
 echo "job_id=${SLURM_JOB_ID:-local}"
 echo "root=$ROOT"
 echo "env=$ENV_NAME"
+echo "cuda_visible_devices=${CUDA_VISIBLE_DEVICES:-}"
+echo "slurm_job_gpus=${SLURM_JOB_GPUS:-}"
+echo "slurm_step_gpus=${SLURM_STEP_GPUS:-}"
+echo "gpu_list=${GPU_LIST//$'\n'/;}"
+echo "gpu_error=$GPU_ERROR"
 echo "llm_base_url=${FACTORIO_AI_LLM_BASE_URL:-}"
 echo "llm_model=${FACTORIO_AI_LLM_MODEL:-}"
 
