@@ -1201,6 +1201,120 @@ def _layout_candidate_build_ready_blockers(
     return blockers[:8]
 
 
+def layout_candidate_prerequisite_tasks(
+    *,
+    candidate_id: str,
+    sandbox_validation: dict[str, Any] | None,
+    site_gate: dict[str, Any],
+    placement_search: dict[str, Any],
+) -> list[dict[str, Any]]:
+    tasks: list[dict[str, Any]] = []
+    if not isinstance(sandbox_validation, dict) or sandbox_validation.get("status") != "pass":
+        tasks.append(
+            {
+                "task_id": f"{candidate_id}:sandbox_validation",
+                "kind": "sandbox_validation",
+                "priority": 95,
+                "status": "pending",
+                "recommended_skill": "plan_factory_site",
+                "detail": "prove the candidate on the disposable sandbox before allowing build execution",
+                "command": (
+                    "python -m factorio_ai.cli validate-layout-candidate "
+                    f"--candidate-id {candidate_id} --variant after --ticks 3600"
+                ),
+            }
+        )
+
+    checks = site_gate.get("checks") if isinstance(site_gate.get("checks"), dict) else {}
+    build_items = checks.get("build_items") if isinstance(checks.get("build_items"), dict) else {}
+    missing_items = build_items.get("missing") if isinstance(build_items.get("missing"), dict) else {}
+    if missing_items:
+        tasks.append(
+            {
+                "task_id": f"{candidate_id}:supply_build_items",
+                "kind": "supply_build_items",
+                "priority": 90,
+                "status": "pending",
+                "recommended_skill": "bootstrap_build_item_mall",
+                "items": dict(sorted((str(key), int(value)) for key, value in missing_items.items())),
+                "detail": _site_gate_missing_summary("supply missing blueprint build items", missing_items),
+            }
+        )
+
+    power = checks.get("power_reach") if isinstance(checks.get("power_reach"), dict) else {}
+    if power.get("status") == "fail":
+        tasks.append(
+            {
+                "task_id": f"{candidate_id}:extend_power",
+                "kind": "extend_power_to_anchor",
+                "priority": 86,
+                "status": "pending",
+                "recommended_skill": "setup_power",
+                "target_anchor": site_gate.get("anchor"),
+                "detail": str(power.get("summary") or "extend a connected pole corridor to the selected anchor"),
+            }
+        )
+
+    input_logistics = checks.get("input_logistics") if isinstance(checks.get("input_logistics"), dict) else {}
+    if input_logistics.get("status") == "fail":
+        inputs = input_logistics.get("inputs") if isinstance(input_logistics.get("inputs"), dict) else {}
+        missing_inputs = [
+            str(item)
+            for item, row in sorted(inputs.items())
+            if isinstance(row, dict) and row.get("status") == "fail"
+        ]
+        tasks.append(
+            {
+                "task_id": f"{candidate_id}:connect_inputs",
+                "kind": "connect_input_logistics",
+                "priority": 84,
+                "status": "pending",
+                "recommended_skill": "plan_factory_site",
+                "inputs": missing_inputs,
+                "target_anchor": site_gate.get("anchor"),
+                "detail": str(input_logistics.get("summary") or "connect required input logistics to the selected anchor"),
+            }
+        )
+
+    collision = checks.get("collision") if isinstance(checks.get("collision"), dict) else {}
+    resources = checks.get("resource_preservation") if isinstance(checks.get("resource_preservation"), dict) else {}
+    if collision.get("status") == "fail" or resources.get("status") == "fail":
+        tasks.append(
+            {
+                "task_id": f"{candidate_id}:clear_anchor",
+                "kind": "select_clear_resource_safe_anchor",
+                "priority": 82,
+                "status": "pending",
+                "recommended_skill": "plan_factory_site",
+                "target_anchor": site_gate.get("anchor"),
+                "detail": "; ".join(
+                    part
+                    for part in (
+                        str(collision.get("summary") or "") if collision.get("status") == "fail" else "",
+                        str(resources.get("summary") or "") if resources.get("status") == "fail" else "",
+                    )
+                    if part
+                ),
+            }
+        )
+
+    if placement_search.get("status") != "found":
+        tasks.append(
+            {
+                "task_id": f"{candidate_id}:find_build_anchor",
+                "kind": "find_build_anchor",
+                "priority": 80,
+                "status": "pending",
+                "recommended_skill": "plan_factory_site",
+                "selected_anchor": placement_search.get("selected_anchor"),
+                "detail": str(placement_search.get("summary") or "find a collision-free, powered, input-connected build anchor"),
+            }
+        )
+
+    tasks.sort(key=lambda item: int(item.get("priority") or 0), reverse=True)
+    return tasks[:8]
+
+
 def _green_circuit_layout_candidate(
     recipe_counts: Counter[str],
     observation: dict[str, Any],
@@ -1238,8 +1352,9 @@ def _green_circuit_layout_candidate(
             all_sites=all_sites,
             preferred_sites=current_circuit_sites,
         )
+    candidate_id = "green-circuit-3-cable-2-circuit-cell"
     return {
-        "candidate_id": "green-circuit-3-cable-2-circuit-cell",
+        "candidate_id": candidate_id,
         "simulation_only": True,
         "not_applied": True,
         "source": "rate-calculator-style static recipe throughput",
@@ -1260,6 +1375,12 @@ def _green_circuit_layout_candidate(
         "validation": validation,
         "site_prebuild_gate": site_gate,
         "site_placement_search": placement_search,
+        "prerequisite_tasks": layout_candidate_prerequisite_tasks(
+            candidate_id=candidate_id,
+            sandbox_validation=None,
+            site_gate=site_gate,
+            placement_search=placement_search,
+        ),
         "simulation": {
             "before": {
                 "copper_cable_assemblers": current_cable,

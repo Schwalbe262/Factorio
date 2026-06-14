@@ -298,6 +298,11 @@ TEXT["en"].update(
         "copy_failed": "Copy failed",
         "manual_copy": "Manual copy opened",
         "close": "Close",
+        "site_logistics": "Site Logistics",
+        "unassigned_logistics": "Unassigned Logistics",
+        "inbound": "In",
+        "outbound": "Out",
+        "linked": "Link",
     }
 )
 TEXT["ko"].update(
@@ -335,6 +340,11 @@ TEXT["ko"].update(
         "copy_failed": "\ubcf5\uc0ac \uc2e4\ud328",
         "manual_copy": "\uc218\ub3d9 \ubcf5\uc0ac \ucc3d \uc5f4\ub9bc",
         "close": "\ub2eb\uae30",
+        "site_logistics": "\uc0ac\uc774\ud2b8 \ubb3c\ub958",
+        "unassigned_logistics": "\ubbf8\uc5f0\uacb0 \ubb3c\ub958",
+        "inbound": "\uc785\ub825",
+        "outbound": "\ucd9c\ub825",
+        "linked": "\uc5f0\uacb0",
     }
 )
 
@@ -909,15 +919,10 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
       </div>
     </section>
 
-    <section class="grid">
-      <div class="panel">
-        <h2>{_t(lang, "factory_sites")}</h2>
-        {_factory_site_table(factory_sites, lang)}
-      </div>
-      <div class="panel">
-        <h2>{_t(lang, "logistics_links")}</h2>
-        {_logistics_link_table(logistics_links, lang)}
-      </div>
+    <section class="panel">
+      <h2>{_t(lang, "factory_sites")}</h2>
+      {_factory_site_table(factory_sites, logistics_links, lang)}
+      {_unassigned_logistics_table(factory_sites, logistics_links, lang)}
     </section>
 
     <section class="panel">
@@ -1109,6 +1114,55 @@ def _page(title: str, body: str, lang: str, objective: Any = None) -> str:
       white-space: nowrap;
       padding: 6px 9px;
       font-size: 12px;
+    }}
+    .site-logistics-row td {{
+      background: #101419;
+      padding: 10px 12px 12px 28px;
+      vertical-align: top;
+    }}
+    .site-logistics-list {{
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      min-width: 0;
+    }}
+    .site-logistics-title {{
+      color: #f0c46c;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }}
+    .site-logistics-link {{
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px 10px;
+      min-width: 0;
+      line-height: 1.35;
+    }}
+    .site-logistics-direction {{
+      border: 1px solid #3a424c;
+      border-radius: 4px;
+      color: #d8e0e8;
+      font-size: 12px;
+      padding: 2px 6px;
+      white-space: nowrap;
+    }}
+    .site-logistics-kind, .site-logistics-status, .site-logistics-length, .site-logistics-more {{
+      color: #9aa4af;
+      font-size: 12px;
+    }}
+    .site-logistics-path {{
+      color: #d8e0e8;
+      overflow-wrap: anywhere;
+    }}
+    .site-logistics-unmatched {{
+      margin-top: 12px;
+    }}
+    .site-logistics-unmatched h3 {{
+      margin: 0 0 8px;
+      color: #f0c46c;
+      font-size: 14px;
     }}
     .layout-candidate-grid {{
       display: grid;
@@ -1839,28 +1893,155 @@ def _compact_json_text(value: Any) -> str:
     return text if len(text) <= 180 else text[:177] + "..."
 
 
-def _factory_site_table(rows: list[Any], lang: str) -> str:
+def _factory_site_table(rows: list[Any], links: list[Any], lang: str) -> str:
     if not rows:
         return f"<p class=\"muted\">{_t(lang, 'no_sites')}</p>"
-    body = "".join(
-        "<tr>"
-        f"<td>{escape(str(row.get('kind') or ''))}</td>"
-        f"<td>{_item_cell(str(row.get('item') or '')) if row.get('item') else ''}</td>"
-        f"<td>{escape(str(row.get('status') or ''))}</td>"
-        f"<td>{escape(_position_text(row.get('position')))}</td>"
-        f"<td>{escape(str(row.get('automation_level') or ''))}</td>"
-        f"<td>{escape(', '.join(str(item) for item in row.get('machines', [])[:5]))}</td>"
-        f"<td>{_site_blueprint_copy_cell(row, lang)}</td>"
-        "</tr>"
-        for row in rows[:80]
-        if isinstance(row, dict)
-    )
+    link_rows = [row for row in links if isinstance(row, dict)]
+    body_parts: list[str] = []
+    for row in rows[:80]:
+        if not isinstance(row, dict):
+            continue
+        machines = row.get("machines") if isinstance(row.get("machines"), list) else []
+        related = _site_logistics_links(row, link_rows)
+        body_parts.append(
+            "<tr>"
+            f"<td>{escape(str(row.get('kind') or ''))}</td>"
+            f"<td>{_item_cell(str(row.get('item') or '')) if row.get('item') else ''}</td>"
+            f"<td>{escape(str(row.get('status') or ''))}</td>"
+            f"<td>{escape(_position_text(row.get('position')))}</td>"
+            f"<td>{escape(str(row.get('automation_level') or ''))}</td>"
+            f"<td>{escape(', '.join(str(item) for item in machines[:5]))}</td>"
+            f"<td>{_site_blueprint_copy_cell(row, lang)}</td>"
+            "</tr>"
+        )
+        if related:
+            body_parts.append(
+                "<tr class=\"site-logistics-row\">"
+                f"<td colspan=\"7\">{_site_logistics_list(row, related, lang)}</td>"
+                "</tr>"
+            )
     return (
         f"<table><thead><tr><th>{_t(lang, 'kind')}</th><th>{_t(lang, 'item')}</th>"
         f"<th>{_t(lang, 'status')}</th><th>{_t(lang, 'position')}</th>"
         f"<th>{_t(lang, 'automation')}</th><th>{_t(lang, 'machines')}</th>"
         f"<th>{_t(lang, 'blueprint')}</th></tr></thead>"
-        f"<tbody>{body}</tbody></table>"
+        f"<tbody>{''.join(body_parts)}</tbody></table>"
+    )
+
+
+def _site_logistics_links(site: dict[str, Any], links: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    exact_aliases, position_aliases = _site_link_aliases(site)
+    if not exact_aliases and not position_aliases:
+        return []
+    return [
+        row
+        for row in links
+        if _link_endpoint_matches_site(row.get("from_site"), exact_aliases, position_aliases)
+        or _link_endpoint_matches_site(row.get("to_site"), exact_aliases, position_aliases)
+    ][:12]
+
+
+def _site_link_aliases(site: dict[str, Any]) -> tuple[set[str], set[str]]:
+    exact: set[str] = set()
+    position_aliases = _position_aliases(site.get("position"))
+    site_id = str(site.get("site_id") or "").strip()
+    kind = str(site.get("kind") or "").strip()
+    item = str(site.get("item") or "").strip()
+    if site_id:
+        exact.add(site_id)
+    for position in position_aliases:
+        if kind:
+            exact.add(f"{kind}:{position}")
+        if kind and item:
+            exact.add(f"{kind}:group:{item}:{position}")
+        if kind == "plate_smelting_line":
+            exact.add(f"smelting:{position}")
+            if item:
+                exact.add(f"smelting:group:{item}:{position}")
+        if kind == "mining_patch" and item:
+            exact.add(f"mining_patch:group:{item}:{position}")
+    return exact, position_aliases
+
+
+def _position_aliases(value: Any) -> set[str]:
+    pair = _position_pair(value)
+    if pair is None:
+        return set()
+    x, y = pair
+    return {f"{x:.1f},{y:.1f}", f"{x:g},{y:g}"}
+
+
+def _link_endpoint_matches_site(value: Any, exact_aliases: set[str], position_aliases: set[str]) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    if text in exact_aliases:
+        return True
+    endpoint_position = text.rsplit(":", 1)[-1]
+    return bool(endpoint_position in position_aliases)
+
+
+def _site_logistics_list(site: dict[str, Any], rows: list[dict[str, Any]], lang: str) -> str:
+    entries = "".join(_site_logistics_entry(site, row, lang) for row in rows[:8])
+    more = ""
+    if len(rows) > 8:
+        more = f"<div class=\"site-logistics-more\">+{len(rows) - 8}</div>"
+    return (
+        "<div class=\"site-logistics-list\">"
+        f"<div class=\"site-logistics-title\">{escape(_t(lang, 'site_logistics'))}</div>"
+        f"{entries}{more}"
+        "</div>"
+    )
+
+
+def _site_logistics_entry(site: dict[str, Any], row: dict[str, Any], lang: str) -> str:
+    direction = _site_logistics_direction(site, row, lang)
+    kind = str(row.get("kind") or "")
+    item = str(row.get("item") or "")
+    status = str(row.get("status") or "")
+    length = row.get("length_tiles")
+    length_text = "" if length in (None, "") else f"{_t(lang, 'length')}={length}"
+    path = f"{row.get('from_site') or ''} -> {row.get('to_site') or ''}"
+    return (
+        "<div class=\"site-logistics-link\">"
+        f"<span class=\"site-logistics-direction\">{escape(direction)}</span>"
+        f"<span class=\"site-logistics-kind\">{escape(kind)}</span>"
+        f"{_item_cell(item) if item else ''}"
+        f"<span class=\"site-logistics-path\">{escape(path)}</span>"
+        f"<span class=\"site-logistics-status\">{escape(status)}</span>"
+        f"<span class=\"site-logistics-length\">{escape(length_text)}</span>"
+        "</div>"
+    )
+
+
+def _site_logistics_direction(site: dict[str, Any], row: dict[str, Any], lang: str) -> str:
+    exact_aliases, position_aliases = _site_link_aliases(site)
+    from_match = _link_endpoint_matches_site(row.get("from_site"), exact_aliases, position_aliases)
+    to_match = _link_endpoint_matches_site(row.get("to_site"), exact_aliases, position_aliases)
+    if from_match and not to_match:
+        return _t(lang, "outbound")
+    if to_match and not from_match:
+        return _t(lang, "inbound")
+    return _t(lang, "linked")
+
+
+def _unassigned_logistics_table(sites: list[Any], links: list[Any], lang: str) -> str:
+    link_rows = [row for row in links if isinstance(row, dict)]
+    if not link_rows:
+        return ""
+    matched_ids: set[int] = set()
+    for site in sites:
+        if not isinstance(site, dict):
+            continue
+        matched_ids.update(id(row) for row in _site_logistics_links(site, link_rows))
+    unmatched = [row for row in link_rows if id(row) not in matched_ids]
+    if not unmatched:
+        return ""
+    return (
+        "<div class=\"site-logistics-unmatched\">"
+        f"<h3>{escape(_t(lang, 'unassigned_logistics'))}</h3>"
+        f"{_logistics_link_table(unmatched, lang)}"
+        "</div>"
     )
 
 

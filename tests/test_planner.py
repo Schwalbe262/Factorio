@@ -334,6 +334,11 @@ class PlannerTests(unittest.TestCase):
         self.assertTrue(candidate["requires_site_prebuild_gate"])
         self.assertFalse(candidate["build_ready"])
         self.assertIn("sandbox validation feedback must pass", candidate["build_ready_blockers"][0])
+        task_kinds = {task["kind"] for task in candidate["prerequisite_tasks"]}
+        self.assertIn("sandbox_validation", task_kinds)
+        self.assertIn("supply_build_items", task_kinds)
+        self.assertIn("extend_power_to_anchor", task_kinds)
+        self.assertIn("connect_input_logistics", task_kinds)
         placement = candidate["site_placement_search"]
         self.assertEqual(placement["status"], "blocked")
         self.assertIn("selected_anchor", placement)

@@ -103,8 +103,8 @@ class WebDashboardTests(unittest.TestCase):
                         {
                             "kind": "belt",
                             "item": "iron-ore",
-                            "from_site": "mining_patch:4,0",
-                            "to_site": "smelting:9,0",
+                            "from_site": "smelting:9,0",
+                            "to_site": "build_item_mall:2,2",
                             "status": "complete",
                             "length_tiles": 5,
                         }
@@ -318,6 +318,9 @@ class WebDashboardTests(unittest.TestCase):
         self.assertIn("/factorio/icon/iron-plate.png", html)
         self.assertIn("build_item_mall", html)
         self.assertIn("smelting:9,0", html)
+        self.assertIn("site-logistics-row", html)
+        self.assertIn("site-logistics-link", html)
+        self.assertNotIn("<h2>Logistics Links</h2>", html)
         self.assertIn("copper-cable assembler ratio", html)
         self.assertIn("r1jae", html)
         self.assertIn("Threats / Defense", html)
@@ -375,6 +378,45 @@ class WebDashboardTests(unittest.TestCase):
         self.assertIn("codex_wait:bootstrap_build_item_mall", html)
         self.assertIn("compact-green-circuit-cell", html)
         self.assertIn("Reduce footprint", html)
+
+    def test_factory_site_logistics_match_position_aliases(self):
+        html = render_dashboard(
+            {
+                "ok": True,
+                "objective": "launch_rocket_program",
+                "updated_at": "now",
+                "observation_tick": 1,
+                "adapter": "test",
+                "monitor": {
+                    "factory_sites": [
+                        {
+                            "kind": "plate_smelting_line",
+                            "item": "iron-plate",
+                            "status": "running",
+                            "position": {"x": 9, "y": 0},
+                            "automation_level": "burner-bootstrap",
+                            "machines": ["stone-furnace"],
+                            "site_id": "plate_smelting_line:group:iron-plate:9.0,0.0",
+                        }
+                    ],
+                    "logistics_links": [
+                        {
+                            "kind": "belt",
+                            "item": "iron-ore",
+                            "from_site": "mining_patch:4,0",
+                            "to_site": "smelting:9,0",
+                            "status": "route_observed",
+                            "length_tiles": 5,
+                        }
+                    ],
+                },
+            },
+            lang="en",
+        )
+
+        self.assertIn("site-logistics-row", html)
+        self.assertIn("smelting:9,0", html)
+        self.assertNotIn('<div class="site-logistics-unmatched">', html)
 
     def test_candidate_blueprint_response_returns_copy_payload(self):
         response = _candidate_blueprint_response(

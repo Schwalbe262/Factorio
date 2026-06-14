@@ -1,10 +1,10 @@
 # Factorio Automation CLI Handoff
 
-Last updated: 2026-06-14 20:35 KST
+Last updated: 2026-06-14 20:52 KST
 Repository: `C:\Users\NEC\Documents\Factorio`
 GitHub: `https://github.com/Schwalbe262/Factorio_automation`
 Current branch: `master`
-Part 69 baseline before this handoff update: `2e25a2b Part 68: gate sandbox layouts before build`
+Part 70 baseline before this handoff update: `2c41e8c Part 69: finalize placement token log`
 
 ## Goal
 
@@ -227,6 +227,22 @@ Part 69 adds deterministic placement search on top of the Part 68 pre-build gate
   - `tests/test_slurm_worker.py`
   - `tests/test_web_dashboard.py`
 
+Part 70 groups site logistics under the relevant factory sites in the web monitor:
+
+- `src/factorio_ai/web_dashboard.py`
+  - Replaces the side-by-side `Factory Sites` and `Logistics Links` panels with one `Factory Sites` panel.
+  - Each site row can now render a child `site-logistics-row` containing inbound/outbound/linked logistics entries for that site.
+  - Link matching uses exact `site_id` first, then position aliases such as `smelting:x,y`, `plate_smelting_line:group:item:x,y`, and mining patch group aliases.
+  - Any logistics links that cannot be matched to a site still render under an `Unassigned Logistics` fallback so links are not hidden.
+
+- `src/factorio_ai/planner.py`
+  - Restores the Part 70 worktree to a valid syntax state after an interrupted edit.
+  - Adds `prerequisite_tasks` to the green-circuit layout candidate so build blockers become explicit operator tasks such as sandbox validation, missing build items, power extension, input logistics, and anchor selection.
+
+- Tests updated:
+  - `tests/test_web_dashboard.py`
+  - `tests/test_planner.py`
+
 ## Verification Already Run
 
 Focused tests:
@@ -320,9 +336,27 @@ $env:PYTHONPATH='src'
 pytest -q tests/test_planner.py tests/test_layout_validation.py tests/test_slurm_worker.py tests/test_web_dashboard.py
 ```
 
-Result: `137 passed`
+Result: `138 passed`
 
 Part 69 full test suite:
+
+```powershell
+$env:PYTHONPATH='src'
+pytest -q
+```
+
+Result: `320 passed`
+
+Part 70 focused tests:
+
+```powershell
+$env:PYTHONPATH='src'
+pytest -q tests/test_web_dashboard.py tests/test_planner.py tests/test_layout_validation.py tests/test_slurm_worker.py
+```
+
+Result: `137 passed`
+
+Part 70 full test suite:
 
 ```powershell
 $env:PYTHONPATH='src'
@@ -366,6 +400,24 @@ python -m factorio_ai.cli record-token-usage --tokens-used 35660655 --label "par
 ```
 
 Result: appended a final `delta_tokens=18355` row to `logs/token_usage.jsonl`; combined Part 69 rows total `198425` tokens and are read by the web dashboard token graph.
+
+Part 70 token usage sample:
+
+```powershell
+$env:PYTHONPATH='src'
+python -m factorio_ai.cli record-token-usage --tokens-used 35769023 --label "part70 grouped site logistics"
+```
+
+Result: appended `delta_tokens=108368` to `logs/token_usage.jsonl`.
+
+Part 70 final token usage sample:
+
+```powershell
+$env:PYTHONPATH='src'
+python -m factorio_ai.cli record-token-usage --tokens-used 35808664 --label "part70 grouped site logistics final"
+```
+
+Result: appended a final `delta_tokens=39641` row to `logs/token_usage.jsonl`; combined Part 70 rows total `148009` tokens and are read by the web dashboard token graph.
 
 ## Live Smoke Checks Already Run
 
@@ -421,6 +473,22 @@ Result:
 - HTTP response contained `anchor=`.
 - The in-app Browser plugin was attempted again, but no `iab` browser was available, so no browser screenshot was captured.
 
+Part 70 dashboard HTTP smoke:
+
+```powershell
+$env:PYTHONPATH='src'
+python -m factorio_ai.cli web --host 127.0.0.1 --port 18892 --objective launch_rocket_program
+Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:18892/factorio?lang=ko&objective=launch_rocket_program'
+```
+
+Result:
+
+- Local dashboard HTTP smoke ran on port `18892`; the validation process was stopped after the smoke.
+- HTTP status was `200`.
+- HTTP response contained `site-logistics-row` and `site-logistics-link`.
+- HTTP response did not contain the old peer heading `<h2>Logistics Links</h2>`.
+- The in-app Browser plugin was attempted again, but no `iab` browser was available, so no browser screenshot was captured.
+
 ## Important Caveat: Blueprint Validation
 
 Part 66 adds a first sandbox validation path, but it is still an early validator, not a complete production simulator.
@@ -461,20 +529,22 @@ This file can later be transformed into Qwen fine-tuning examples.
 
 ## Next Implementation Priority
 
-Part 69 makes sandbox-proven layouts search for a nearby physical anchor, but it still does not execute builds. Next work should convert blockers into actionable deterministic tasks and only then consider build execution:
+Part 70 makes factory-site logistics easier to inspect and adds initial `prerequisite_tasks` metadata, but the dashboard still cannot choose a site as the manual improvement target and the planner still does not execute prerequisite work. Next work should close that operator loop before build execution:
 
-1. Convert `build_ready_blockers` into strategy hints or deterministic prerequisite tasks: build-item mall, power pole corridor, iron/copper belt link, or stock collection.
-2. Add a live observed-state inspection command or dashboard detail that prints the selected `site_placement_search.selected_anchor`, blockers, and top candidate anchors for operators.
-3. Add a deterministic build executor only after sandbox pass, `site_prebuild_gate.status=pass`, `site_placement_search.status=found`, and required build items are available.
-4. Consider exporting `logs/layout-validation-feedback.jsonl`, `site_prebuild_gate`, and `site_placement_search` rows into Qwen fine-tuning examples later.
-5. Rerun before any future build-ready claim:
+1. Add a dashboard control on each factory site to manually select that site as the next improvement target.
+2. Store the selected site target in runtime state and feed it into layout improvement/context generation so candidates can be anchored to the operator-selected site.
+3. Convert `prerequisite_tasks` into strategy hints or deterministic prerequisite tasks: build-item mall, power pole corridor, iron/copper belt link, stock collection, or anchor reselection.
+4. Add a live observed-state inspection command or dashboard detail that prints the selected `site_placement_search.selected_anchor`, blockers, prerequisite tasks, and top candidate anchors for operators.
+5. Add a deterministic build executor only after sandbox pass, `site_prebuild_gate.status=pass`, `site_placement_search.status=found`, and required build items are available.
+6. Consider exporting `logs/layout-validation-feedback.jsonl`, `site_prebuild_gate`, `site_placement_search`, and `prerequisite_tasks` rows into Qwen fine-tuning examples later.
+7. Rerun before any future build-ready claim:
 
 ```powershell
 $env:PYTHONPATH='src'
 python -m factorio_ai.cli validate-layout-candidate --candidate-id green-circuit-3-cable-2-circuit-cell --variant after --ticks 3600 --player r1jae
 ```
 
-6. Only mark the candidate build-ready after sandbox validation, site pre-build gate, and deterministic site placement checks all pass.
+8. Only mark the candidate build-ready after sandbox validation, site pre-build gate, deterministic site placement checks, and prerequisite tasks all pass.
 
 ## Core Commands
 
@@ -557,7 +627,7 @@ Dashboard should include:
 - Desired production targets and user-editable rates.
 - Estimated production / consumption / deficits.
 - Factory sites grouped by site, not individual entities.
-- Site-to-site logistics links.
+- Site-to-site logistics links grouped under related factory sites, with only unmatched links shown as a fallback list.
 - Power networks and unconnected consumers.
 - Threats / defense and recent damage.
 - LLM decision logs.
