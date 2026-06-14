@@ -722,7 +722,7 @@ Part 73 adds goal and loop journal tracking:
   - Skill loops append one note per skill execution and insight rows for item-count increases or successful skill completion.
   - Autopilot cycles append one note per strategy cycle.
   - Idle and Codex-wait layout cycles append notes.
-  - Layout results append insights when they produce a selected candidate or next simulation focus.
+  - Layout results append insights only when before/after evidence confirms an actual improvement; simulation-only candidates and next-focus suggestions stay in `note.md` and raw logs.
 
 - `src/factorio_ai/token_usage.py`
   - Token summaries now include `latest_delta_tokens`, optional `FACTORIO_AI_WEEKLY_TOKEN_QUOTA`, and weekly percentage fields.
@@ -872,7 +872,7 @@ Open review GUI:
 ## Known Design Issues To Keep In Mind
 
 - Factory sites have historically been too scattered. Site placement must prefer starter-local clusters until rail logistics exist.
-- Power was previously placed too far from spawn, causing long pole corridor problems.
+- Power should prefer starter-local water; if no buildable starter-local water exists, the nearest remote water steam block is allowed as a one-time bootstrap exception and must not be treated as permission to scatter normal factory sites.
 - Production blocks must avoid covering starter ore/coal patches unless unavoidable.
 - Research automation must use assemblers and labs; hand-crafting science packs is not acceptable for sustained progress.
 - Labs usually need daisy chain or belt-fed science distribution.

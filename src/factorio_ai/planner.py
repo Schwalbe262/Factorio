@@ -3135,10 +3135,11 @@ class SetupPowerSkill:
                 continue
             spec = layout[f"{key}_spec"]
             position = spec["position"]
+            remote_prefix = "remote bootstrap " if layout.get("remote_bootstrap_power") else ""
             if distance(player, position) > 20:
                 return PlannerDecision(
                     {"type": "move_to", "position": _power_stand_position(layout)},
-                    f"move near planned {spec['name']} position",
+                    f"move near planned {remote_prefix}{spec['name']} position",
                 )
             return PlannerDecision(
                 {
@@ -3147,7 +3148,7 @@ class SetupPowerSkill:
                     "position": position,
                     "direction": spec.get("direction", NORTH),
                 },
-                f"place {spec['name']} for first steam power block",
+                f"place {remote_prefix}{spec['name']} for first steam power block",
             )
 
         boiler = layout.get("boiler")
@@ -4264,7 +4265,8 @@ def _select_power_layout(observation: dict[str, Any]) -> dict[str, Any] | None:
     sites = observation.get("power_sites")
     if not isinstance(sites, list):
         return None
-    candidates: list[tuple[float, dict[str, Any]]] = []
+    local_candidates: list[tuple[float, dict[str, Any]]] = []
+    remote_candidates: list[tuple[float, dict[str, Any]]] = []
     for site in sites:
         if not isinstance(site, dict):
             continue
@@ -4272,13 +4274,20 @@ def _select_power_layout(observation: dict[str, Any]) -> dict[str, Any] | None:
         if layout is None:
             continue
         position = _power_layout_position(layout)
-        if not _within_starter_logistics_area(observation, position, radius=STARTER_POWER_SITE_RADIUS):
+        distance_to_area = _distance_to_starter_logistics_area(observation, position)
+        if _within_starter_logistics_area(observation, position, radius=STARTER_POWER_SITE_RADIUS):
+            local_candidates.append((distance_to_area, layout))
             continue
-        candidates.append((_distance_to_starter_logistics_area(observation, position), layout))
-    if not candidates:
-        return None
-    candidates.sort(key=lambda item: item[0])
-    return candidates[0][1]
+        remote_layout = dict(layout)
+        remote_layout["remote_bootstrap_power"] = True
+        remote_candidates.append((distance_to_area, remote_layout))
+    if local_candidates:
+        local_candidates.sort(key=lambda item: item[0])
+        return local_candidates[0][1]
+    if remote_candidates:
+        remote_candidates.sort(key=lambda item: item[0])
+        return remote_candidates[0][1]
+    return None
 
 
 def _layout_from_power_site(site: dict[str, Any]) -> dict[str, Any] | None:

@@ -90,3 +90,10 @@
 - Evidence: `{"after":"no-mod-strategy --require-llm returned research_automation with guardrail_adjusted.from=bootstrap_build_item_mall","before":"remote Qwen selected bootstrap_build_item_mall while Automation was not researched","belt_path_guardrail":"connect_coal_fuel_feed is redirected until a transport-belt assembler mall is observed","source_loop":11,"tests":{"pytest":"354 passed","strategy":"42 passed"}}`
 - Remaining risk: Needs continued validation in later loops.
 
+## 2026-06-15 01:05:30 +09:00 - Insight 10
+- Source loop: Loop 33
+- Improvement: `research_automation` no longer stops at missing steam-power water sites on the current no-cliff map; it can use the nearest remote water site as a bootstrap-only exception while preserving starter-local preference.
+- Before: live observe `power_sites_count=0`; `research_automation` stopped with `cannot find a buildable water site for steam power`.
+- After: live observe `power_sites_count=20`; planner next action moved to coal prerequisite collection instead of water-site failure.
+- Evidence: `{"after":{"first_power_site_distance":787.87,"first_power_site_distance_from_agent":723.47,"planner_action":"move_to near coal","power_sites_count":20,"qwen_selected_skill":"research_automation","tests":"356 passed"},"before":{"failure":"cannot find a buildable water site for steam power","power_sites_count":0},"source_loop":33}`
+- Remaining risk: The first water source is far from spawn, so this exception should not justify scattering normal production sites before rail or robust logistics.

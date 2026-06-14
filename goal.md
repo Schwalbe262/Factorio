@@ -40,7 +40,7 @@
 
 - 2026-06-15 00:12 KST: the previous live map was backed up because the factory sites were too scattered for the automation-first logistics goal.
 - A fresh no-mod world is now running with Nauvis cliffs disabled (`cliff_settings.richness = 0`), starter inventory only, and initial strategy `produce_iron_plate`.
-- Next live objective: bootstrap iron, coal, copper, and steam power as compact starter-local sites; after the first bootstrap phase, repeated inputs must move through site-to-site logistics lines rather than player inventory shuttle loops.
+- Next live objective: bootstrap iron, coal, copper, and steam power as compact starter-local sites where possible; if no buildable starter-local water exists, allow the nearest remote water steam block as a one-time bootstrap exception. After the first bootstrap phase, repeated inputs must move through site-to-site logistics lines rather than player inventory shuttle loops.
 
 ## Factory Quality Criteria
 

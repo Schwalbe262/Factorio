@@ -276,22 +276,31 @@ def record_layout_result_insight(
 ) -> RunInsight | None:
     if not isinstance(result, dict):
         return None
-    candidate_id = str(result.get("selected_candidate_id") or "")
-    focus = str(result.get("next_simulation_focus") or "")
-    if not candidate_id and not focus:
+    evidence = result.get("improvement_evidence") if isinstance(result.get("improvement_evidence"), dict) else {}
+    confirmed = bool(
+        result.get("confirmed_improvement")
+        or result.get("applied_improvement")
+        or evidence.get("confirmed")
+    )
+    before = result.get("before_metrics", result.get("before", evidence.get("before")))
+    after = result.get("after_metrics", result.get("after", evidence.get("after")))
+    if not confirmed or before in (None, "") or after in (None, ""):
         return None
-    detail = candidate_id or focus
+    candidate_id = str(result.get("selected_candidate_id") or "")
+    detail = str(result.get("improvement") or result.get("detail") or candidate_id or "confirmed layout improvement")
     insight = RunInsight(
         timestamp=_now(),
         objective=objective,
         goal=active_skill,
-        kind="layout_candidate_improved",
-        detail=f"Layout work produced a candidate/focus for {active_skill}: {detail}",
+        kind="layout_improvement_confirmed",
+        detail=f"Layout work improved {active_skill}: {detail}",
         evidence={
             "selected_candidate_id": candidate_id,
             "score": result.get("score"),
             "source": result.get("source"),
-            "next_simulation_focus": focus,
+            "before": before,
+            "after": after,
+            **evidence,
         },
     )
     return record_run_insight(log_dir, insight, repo_root=repo_root)
@@ -554,6 +563,8 @@ def _insight_before(insight: RunInsight) -> str:
     evidence = insight.evidence or {}
     if "initial" in evidence:
         return f"{evidence.get('item', 'tracked item')} = {evidence.get('initial')}"
+    if "before" in evidence:
+        return _compact_evidence_value(evidence["before"])
     return "not recorded"
 
 
@@ -563,6 +574,8 @@ def _insight_after(insight: RunInsight) -> str:
         return f"{evidence.get('item', 'tracked item')} = {evidence.get('final')}"
     if "item_count" in evidence:
         return f"{evidence.get('item', 'tracked item')} = {evidence.get('item_count')}"
+    if "after" in evidence:
+        return _compact_evidence_value(evidence["after"])
     return "not recorded"
 
 
@@ -577,3 +590,9 @@ def _insight_remaining_risk(insight: RunInsight) -> str:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _compact_evidence_value(value: Any) -> str:
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return str(value)

@@ -92,7 +92,7 @@ class RunJournalTests(unittest.TestCase):
             rows = [json.loads(line) for line in (log_dir / "run-notes.jsonl").read_text().splitlines()]
             self.assertEqual(rows[0]["loop_number"], 6)
 
-    def test_layout_result_records_candidate_insight(self):
+    def test_layout_result_without_confirmed_before_after_stays_out_of_insights(self):
         with TemporaryDirectory() as root:
             repo_root = Path(root)
             log_dir = repo_root / "logs"
@@ -108,10 +108,37 @@ class RunJournalTests(unittest.TestCase):
                 repo_root=repo_root,
             )
 
+            self.assertIsNone(insight)
+            summary = run_journal_summary(log_dir, repo_root=repo_root)
+            self.assertEqual(summary["insight_count"], 0)
+
+    def test_layout_result_records_confirmed_improvement_insight(self):
+        with TemporaryDirectory() as root:
+            repo_root = Path(root)
+            log_dir = repo_root / "logs"
+            insight = record_layout_result_insight(
+                log_dir,
+                objective="launch_rocket_program",
+                active_skill="optimize_green_circuit_cell",
+                result={
+                    "confirmed_improvement": True,
+                    "source": "validation",
+                    "score": 91,
+                    "selected_candidate_id": "green-circuit-3-cable-2-circuit-cell",
+                    "improvement": "throughput rose without adding a hand-carry dependency",
+                    "before_metrics": {"throughput_per_minute": 30, "hand_carry_links": 1},
+                    "after_metrics": {"throughput_per_minute": 45, "hand_carry_links": 0},
+                },
+                repo_root=repo_root,
+            )
+
             self.assertIsNotNone(insight)
             summary = run_journal_summary(log_dir, repo_root=repo_root)
             self.assertEqual(summary["insight_count"], 1)
-            self.assertEqual(summary["insights"][0]["kind"], "layout_candidate_improved")
+            self.assertEqual(summary["insights"][0]["kind"], "layout_improvement_confirmed")
+            insight_text = (repo_root / "insight.md").read_text(encoding="utf-8")
+            self.assertIn('"throughput_per_minute":30', insight_text)
+            self.assertIn('"throughput_per_minute":45', insight_text)
 
 
 if __name__ == "__main__":

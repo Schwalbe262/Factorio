@@ -1436,6 +1436,29 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["name"], "offshore-pump")
         self.assertLess(decision.action["position"]["x"], 40)
 
+    def test_setup_power_skill_uses_nearest_remote_water_site_when_no_local_site_exists(self):
+        obs = base_observation()
+        obs["base"] = {"spawn_position": {"x": 0, "y": 0}, "anchor_position": {"x": 0, "y": 0}}
+        obs["player"] = {"position": {"x": 190.5, "y": -15.5}}
+        obs["inventory"] = {
+            "coal": 10,
+            "offshore-pump": 1,
+            "boiler": 1,
+            "steam-engine": 1,
+            "small-electric-pole": 1,
+        }
+        obs["power_sites"] = [
+            power_site_at(420.5, -240.5, 485),
+            power_site_at(190.5, -20.5, 191),
+        ]
+
+        decision = SetupPowerSkill().next_action(obs)
+
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "offshore-pump")
+        self.assertEqual(decision.action["position"], {"x": 190.5, "y": -20.5})
+        self.assertIn("remote bootstrap", decision.reason)
+
     def test_setup_power_skill_mines_tree_when_pole_needs_wood(self):
         obs = base_observation()
         obs["inventory"] = {

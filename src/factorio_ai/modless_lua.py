@@ -126,8 +126,8 @@ local OBSERVE_RADIUS = {OBSERVE_RADIUS}
 local STARTER_RESOURCE_RADIUS = 224
 local STARTER_RESOURCE_TILE_LIMIT = 1200
 local REMOTE_RESOURCE_TILE_LIMIT = 220
-local POWER_SITE_RADIUS = 512
-local POWER_SITE_WATER_TILE_LIMIT = 360
+local POWER_SITE_RADIUS = 1024
+local POWER_SITE_WATER_TILE_LIMIT = 1600
 local LAB_SITE_RADIUS = 96
 local POLE_WIRE_REACH = 7.5
 local STARTER_POLE_SUPPLY_REACH = 2.5
@@ -668,6 +668,7 @@ local function collect_power_sites(surface, position, force, player_position)
     name = { "water", "deepwater", "water-green", "deepwater-green" },
     limit = POWER_SITE_WATER_TILE_LIMIT
   })
+  table.sort(water_tiles, function(a, b) return distance(position, a.position) < distance(position, b.position) end)
   for _, tile in pairs(water_tiles) do
     local tile_position = tile.position
     for dx = -7, 7 do
