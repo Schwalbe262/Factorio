@@ -840,6 +840,7 @@ def request_layout_improvement(
     observation: dict[str, Any],
     production_targets: dict[str, float] | None = None,
     factory_monitor: dict[str, Any] | None = None,
+    layout_validation_feedback: dict[str, Any] | None = None,
     cfg: RemoteSlurmConfig | None = None,
     timeout_seconds: int | None = None,
     force_attached: bool = False,
@@ -856,6 +857,7 @@ def request_layout_improvement(
             "observation": observation,
             "production_targets": production_targets or {},
             "factory_monitor": factory_monitor or {},
+            "layout_validation_feedback": layout_validation_feedback or {},
         },
     }
     if force_attached or _use_attached_srun(cfg):

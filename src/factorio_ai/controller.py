@@ -13,6 +13,7 @@ from typing import Any
 
 from .llm_log import record_llm_decision, strategy_request_summary
 from .config import AppConfig, REPO_ROOT
+from .layout_validation import layout_validation_feedback_summary
 from .models import (
     ActionValidationError,
     PlannerDecision,
@@ -1485,13 +1486,14 @@ class FactorioController:
 
             targets = load_targets(self.cfg.runtime_dir, objective)
             monitor = summarize_factory(observation, objective, production_targets=targets.per_minute)
+            validation_feedback = layout_validation_feedback_summary(self.cfg.log_dir)
             self._background_layout_last_submit = now
             mode = os.getenv("FACTORIO_AI_BACKGROUND_LAYOUT_MODE", "attach").strip().lower()
             if mode in {"attach", "attached", "srun"}:
                 self._background_layout_thread_result = None
                 self._background_layout_thread = threading.Thread(
                     target=self._background_layout_attached_worker,
-                    args=(objective, active_skill, active_step, observation, targets.per_minute, monitor),
+                    args=(objective, active_skill, active_step, observation, targets.per_minute, monitor, validation_feedback),
                     daemon=True,
                 )
                 self._background_layout_thread.start()
@@ -1513,6 +1515,7 @@ class FactorioController:
                         "observation": observation,
                         "production_targets": targets.per_minute,
                         "factory_monitor": monitor,
+                        "layout_validation_feedback": validation_feedback,
                     },
                 }
                 self._background_layout_task_name = remote_slurm.submit_task(task)
@@ -1542,6 +1545,7 @@ class FactorioController:
         observation: dict[str, Any],
         production_targets: dict[str, float],
         monitor: dict[str, Any],
+        validation_feedback: dict[str, Any],
     ) -> None:
         try:
             from . import remote_slurm
@@ -1553,6 +1557,7 @@ class FactorioController:
                 observation,
                 production_targets=production_targets,
                 factory_monitor=monitor,
+                layout_validation_feedback=validation_feedback,
                 timeout_seconds=int(os.getenv("FACTORIO_AI_BACKGROUND_LAYOUT_TIMEOUT_SECONDS", "180")),
                 force_attached=True,
             )

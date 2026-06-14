@@ -183,6 +183,14 @@ class WebDashboardTests(unittest.TestCase):
                                 "errors": [],
                                 "warnings": [],
                             },
+                            "sandbox_validation": {
+                                "status": "fail",
+                                "reasons": ["expected output electronic-circuit was not observed after sandbox ticks"],
+                                "observed_outputs": {"electronic-circuit": 0},
+                                "ticks": 3600,
+                                "checked_machines": 5,
+                                "powered_machines": 5,
+                            },
                             "simulation": {
                                 "score": 88,
                                 "before": {"electronic_circuit_per_minute": 10},
@@ -317,6 +325,9 @@ class WebDashboardTests(unittest.TestCase):
         self.assertIn("layout-candidate-grid", html)
         self.assertIn("layout-candidate-card", html)
         self.assertIn("layout-validation-pass", html)
+        self.assertIn("layout-validation-fail", html)
+        self.assertIn("expected output electronic-circuit", html)
+        self.assertIn("powered=5", html)
         self.assertIn("machines=5", html)
         self.assertIn("manual-copy-overlay", html)
         self.assertIn(FACTORIO_BLUEPRINT_ROUTE, html)

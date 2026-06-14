@@ -16,6 +16,7 @@ from .planner import (
     factory_layout_simulation_candidates,
     factory_layout_structure,
 )
+from .layout_validation import merge_sandbox_validation_feedback
 from .skill_registry import IMPLEMENTED_SKILLS
 from .strategy import heuristic_strategy, make_strategy_payload, normalize_strategy_response, reconcile_strategy_decision
 
@@ -258,6 +259,8 @@ def compact_layout_improvement_payload(payload: dict[str, Any]) -> dict[str, Any
     factory_sites = monitor.get("factory_sites") if isinstance(monitor.get("factory_sites"), list) else []
     logistics_links = monitor.get("logistics_links") if isinstance(monitor.get("logistics_links"), list) else []
     layout_improvement = _layout_improvement_context(observation, factory_sites, logistics_links)
+    feedback = payload.get("layout_validation_feedback") if isinstance(payload.get("layout_validation_feedback"), dict) else {}
+    layout_improvement = merge_sandbox_validation_feedback(layout_improvement, feedback)
     active_skill = str(payload.get("active_skill") or "")
     if active_skill.startswith("codex_wait:"):
         instruction = (
@@ -276,10 +279,12 @@ def compact_layout_improvement_payload(payload: dict[str, Any]) -> dict[str, Any
         "instruction": instruction,
         "production_targets": _dict_head(payload.get("production_targets"), 16),
         "layout_improvement": layout_improvement,
+        "layout_validation_feedback": _compact_layout_validation_feedback(feedback),
         "rules": [
             "Do not apply or build the design.",
             "Prefer candidates that reduce bottlenecks, footprint, transport distance, or ratio error.",
             "Treat candidate validation failures as training feedback: explain the exact inserter, belt, power, or collision reason and do not mark it build-ready.",
+            "If sandbox_validation is fail, use its lesson and reasons in the next candidate design.",
             "Flag belt-capacity risk when required item flow approaches or exceeds belt capacity.",
             "The output can be used later by a deterministic executor after explicit approval.",
         ],
@@ -315,17 +320,27 @@ def heuristic_layout_improvement(compact: dict[str, Any]) -> dict[str, Any]:
             not isinstance(item.get("validation"), dict)
             or item["validation"].get("status") in {None, "", "pass", "warning"}
         )
+        and (
+            not isinstance(item.get("sandbox_validation"), dict)
+            or item["sandbox_validation"].get("status") in {None, "", "pass", "warning"}
+        )
     ]
     selected = valid_candidates[0] if valid_candidates else (candidates[0] if candidates and isinstance(candidates[0], dict) else {})
     simulation = selected.get("simulation") if isinstance(selected.get("simulation"), dict) else {}
     validation = selected.get("validation") if isinstance(selected.get("validation"), dict) else {}
+    sandbox_validation = selected.get("sandbox_validation") if isinstance(selected.get("sandbox_validation"), dict) else {}
     validation_errors = validation.get("errors") if isinstance(validation.get("errors"), list) else []
     validation_warnings = validation.get("warnings") if isinstance(validation.get("warnings"), list) else []
     validation_status = str(validation.get("status") or "")
+    sandbox_reasons = sandbox_validation.get("reasons") if isinstance(sandbox_validation.get("reasons"), list) else []
+    sandbox_status = str(sandbox_validation.get("status") or "")
     risks = ["Static simulation only; exact tiles, belts, inserters, power, and collisions are not validated here."]
     if validation_status:
         risks.append(f"static_validation={validation_status}")
+    if sandbox_status:
+        risks.append(f"sandbox_validation={sandbox_status}")
     risks.extend(str(item) for item in (validation_errors or validation_warnings)[:4])
+    risks.extend(str(item) for item in sandbox_reasons[:4])
     return {
         "selected_candidate_id": selected.get("candidate_id"),
         "score": _int_value(simulation.get("score"), 50),
@@ -693,6 +708,34 @@ def _compact_value(value: Any, *, string_limit: int = 220, list_limit: int = 8) 
     return value
 
 
+def _compact_layout_validation_feedback(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    latest = value.get("latest_by_candidate") if isinstance(value.get("latest_by_candidate"), dict) else {}
+    rows = []
+    for candidate_id, row in list(latest.items())[:8]:
+        if not isinstance(row, dict):
+            continue
+        sandbox = row.get("sandbox_validation") if isinstance(row.get("sandbox_validation"), dict) else {}
+        rows.append(
+            {
+                "candidate_id": _compact_value(candidate_id, string_limit=90),
+                "variant": row.get("variant"),
+                "timestamp": row.get("timestamp"),
+                "status": sandbox.get("status"),
+            "reasons": _compact_value(sandbox.get("reasons"), string_limit=140, list_limit=4),
+            "observed_outputs": _compact_value(sandbox.get("observed_outputs"), string_limit=80, list_limit=5),
+            "checked_inserters": sandbox.get("checked_inserters"),
+            "powered_inserters": sandbox.get("powered_inserters"),
+            "lesson": _compact_value(row.get("lesson"), string_limit=180),
+        }
+        )
+    return {
+        "entry_count": value.get("entry_count"),
+        "latest_by_candidate": rows,
+    }
+
+
 def _compact_build_item_supply(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         return {}
@@ -894,6 +937,7 @@ def _compact_layout_item(value: dict[str, Any]) -> dict[str, Any]:
 def _compact_layout_candidate(value: dict[str, Any]) -> dict[str, Any]:
     simulation = value.get("simulation") if isinstance(value.get("simulation"), dict) else {}
     validation = value.get("validation") if isinstance(value.get("validation"), dict) else {}
+    sandbox_validation = value.get("sandbox_validation") if isinstance(value.get("sandbox_validation"), dict) else {}
     return {
         "candidate_id": _compact_value(value.get("candidate_id"), string_limit=90),
         "simulation_only": bool(value.get("simulation_only")),
@@ -908,6 +952,19 @@ def _compact_layout_candidate(value: dict[str, Any]) -> dict[str, Any]:
         }
         if validation
         else {},
+        "sandbox_validation": {
+            "status": sandbox_validation.get("status"),
+            "ticks": sandbox_validation.get("ticks"),
+            "observed_outputs": _compact_value(sandbox_validation.get("observed_outputs"), string_limit=80, list_limit=5),
+            "reasons": _compact_value(sandbox_validation.get("reasons"), string_limit=140, list_limit=4),
+            "checked_machines": sandbox_validation.get("checked_machines"),
+            "powered_machines": sandbox_validation.get("powered_machines"),
+            "checked_inserters": sandbox_validation.get("checked_inserters"),
+            "powered_inserters": sandbox_validation.get("powered_inserters"),
+        }
+        if sandbox_validation
+        else {},
+        "sandbox_lesson": _compact_value(value.get("sandbox_validation_lesson"), string_limit=180),
         "simulation": {
             "score": simulation.get("score"),
             "before": _compact_value(simulation.get("before"), string_limit=80, list_limit=5),

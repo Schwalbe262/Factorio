@@ -222,6 +222,55 @@ class SlurmWorkerTests(unittest.TestCase):
         self.assertIn("Codex reports that the executor work is complete", compact["instruction"])
         self.assertIn("simulation only", compact["instruction"])
 
+    def test_layout_payload_includes_sandbox_validation_feedback(self):
+        feedback = {
+            "entry_count": 1,
+            "latest_by_candidate": {
+                "green-circuit-3-cable-2-circuit-cell": {
+                    "timestamp": "2026-06-14T00:00:00+00:00",
+                    "candidate_id": "green-circuit-3-cable-2-circuit-cell",
+                    "variant": "after",
+                    "sandbox_validation": {
+                        "status": "fail",
+                        "reasons": ["expected output electronic-circuit was not observed after sandbox ticks"],
+                        "observed_outputs": {"electronic-circuit": 0},
+                        "ticks": 3600,
+                        "checked_machines": 5,
+                    },
+                    "lesson": "Do not mark green circuit layouts build-ready until sandbox ticks prove output.",
+                }
+            },
+        }
+        compact = compact_layout_improvement_payload(
+            {
+                "objective": "launch_rocket_program",
+                "active_skill": "bootstrap_build_item_mall",
+                "active_step": 4,
+                "observation": {
+                    "inventory": {},
+                    "entities": [
+                        {
+                            "name": "assembling-machine-1",
+                            "unit_number": 10,
+                            "recipe": "electronic-circuit",
+                            "position": {"x": 0, "y": 0},
+                            "electric_network_connected": True,
+                            "inventories": {},
+                        }
+                    ],
+                    "resources": [],
+                },
+                "production_targets": {},
+                "layout_validation_feedback": feedback,
+            }
+        )
+
+        candidate = compact["layout_improvement"]["simulation_candidates"][0]
+        self.assertEqual(candidate["sandbox_validation"]["status"], "fail")
+        self.assertIn("sandbox ticks prove output", candidate["sandbox_validation_lesson"])
+        self.assertEqual(compact["layout_validation_feedback"]["entry_count"], 1)
+        self.assertIn("sandbox_validation is fail", " ".join(compact["rules"]))
+
 
 if __name__ == "__main__":
     unittest.main()

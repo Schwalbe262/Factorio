@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 from .config import AppConfig
 from .controller import FactorioController
 from .item_icons import read_item_icon_png
+from .layout_validation import layout_validation_feedback_summary, merge_sandbox_validation_feedback
 from .llm_log import llm_decision_summary
 from .monitor import summarize_factory
 from .networking import dashboard_urls
@@ -285,6 +286,7 @@ TEXT["en"].update(
         "copy_before_blueprint": "Copy before",
         "copy_after_blueprint": "Copy after",
         "validation": "Validation",
+        "sandbox_validation": "Sandbox",
         "validation_pass": "Pass",
         "validation_warning": "Warning",
         "validation_fail": "Fail",
@@ -317,6 +319,7 @@ TEXT["ko"].update(
         "copy_before_blueprint": "\uac1c\uc120 \uc804 \ubcf5\uc0ac",
         "copy_after_blueprint": "\uac1c\uc120 \ud6c4 \ubcf5\uc0ac",
         "validation": "\uac80\uc99d",
+        "sandbox_validation": "\uc0cc\ub4dc\ubc15\uc2a4",
         "validation_pass": "\ud1b5\uacfc",
         "validation_warning": "\uacbd\uace0",
         "validation_fail": "\uc2e4\ud328",
@@ -651,10 +654,14 @@ def build_dashboard_state(cfg: AppConfig, objective: str) -> dict[str, Any]:
     llm_decisions = llm_decision_summary(cfg.log_dir)
     worker_comparison = strategy_worker_comparison_summary(cfg.log_dir)
     layout_background = layout_background_summary(cfg.log_dir)
+    layout_validation_feedback = layout_validation_feedback_summary(cfg.log_dir)
     try:
         observation, adapter = observe_dashboard_state(cfg)
         monitor = summarize_factory(observation, objective, production_targets=targets.per_minute)
-        layout_improvement = make_layout_improvement_context(observation)
+        layout_improvement = merge_sandbox_validation_feedback(
+            make_layout_improvement_context(observation),
+            layout_validation_feedback,
+        )
         strategy = annotate_strategy_with_skill_status(
             heuristic_strategy(objective, observation, targets.per_minute),
             runtime_dir=cfg.runtime_dir,
@@ -672,6 +679,7 @@ def build_dashboard_state(cfg: AppConfig, objective: str) -> dict[str, Any]:
             "monitor": monitor,
             "layout_improvement": layout_improvement,
             "layout_background": layout_background,
+            "layout_validation_feedback": layout_validation_feedback,
             "strategy": strategy,
             "token_usage": token_usage,
             "llm_decisions": llm_decisions,
@@ -685,6 +693,7 @@ def build_dashboard_state(cfg: AppConfig, objective: str) -> dict[str, Any]:
             "targets": targets.to_dict(),
             "error": friendly_dashboard_error(exc),
             "layout_background": layout_background,
+            "layout_validation_feedback": layout_validation_feedback,
             "token_usage": token_usage,
             "llm_decisions": llm_decisions,
             "strategy_worker_comparison": worker_comparison,
@@ -1635,6 +1644,7 @@ def _layout_candidate_table(rows: list[Any], lang: str) -> str:
             "</div>"
             f"<p class=\"layout-candidate-pattern\">{escape(str(row.get('target_pattern') or ''))}</p>"
             f"{_layout_validation_panel(row.get('validation'), lang)}"
+            f"{_layout_validation_panel(row.get('sandbox_validation'), lang, title_key='sandbox_validation')}"
             "<div class=\"layout-candidate-metrics\">"
             f"{_layout_metric_box(_t(lang, 'before'), simulation.get('before'))}"
             f"{_layout_metric_box(_t(lang, 'after'), simulation.get('after'))}"
@@ -1649,7 +1659,7 @@ def _layout_candidate_table(rows: list[Any], lang: str) -> str:
     return f"<div class=\"layout-candidate-grid\">{body}</div>"
 
 
-def _layout_validation_panel(value: Any, lang: str) -> str:
+def _layout_validation_panel(value: Any, lang: str, *, title_key: str = "validation") -> str:
     if not isinstance(value, dict):
         return ""
     status = str(value.get("status") or "warning")
@@ -1657,15 +1667,24 @@ def _layout_validation_panel(value: Any, lang: str) -> str:
     label = _t(lang, label_key) if label_key in TEXT.get(lang, {}) else status
     messages = value.get("errors") if status == "fail" else value.get("warnings")
     if not isinstance(messages, list):
-        messages = []
+        messages = value.get("reasons") if isinstance(value.get("reasons"), list) else []
     detail = "; ".join(str(item) for item in messages[:2])
     checked = value.get("checked_machines")
+    powered = value.get("powered_machines")
+    inserters = value.get("checked_inserters")
+    powered_inserters = value.get("powered_inserters")
     detail_text = f"{detail} " if detail else ""
     if checked is not None:
         detail_text += f"machines={checked}"
+    if powered is not None:
+        detail_text += f" powered={powered}"
+    if inserters is not None:
+        detail_text += f" inserters={inserters}"
+    if powered_inserters is not None:
+        detail_text += f" inserter_powered={powered_inserters}"
     return (
         f"<div class=\"layout-validation layout-validation-{escape(status, quote=True)}\">"
-        f"<strong>{escape(_t(lang, 'validation'))}: {escape(label)}</strong>"
+        f"<strong>{escape(_t(lang, title_key))}: {escape(label)}</strong>"
         f"<span>{escape(detail_text.strip())}</span>"
         "</div>"
     )

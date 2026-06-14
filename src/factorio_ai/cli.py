@@ -21,6 +21,7 @@ from .factorio import (
 )
 from .modless_lua import ModlessLuaController
 from . import remote_slurm
+from .layout_validation import validate_layout_candidate
 from .targets import load_targets
 from .strategy import skill_catalog_payload
 from .vanilla_gui import (
@@ -280,6 +281,17 @@ def main(argv: list[str] | None = None) -> None:
     web_parser.add_argument("--host", default="0.0.0.0")
     web_parser.add_argument("--port", type=int, default=18889)
     web_parser.add_argument("--objective", default="launch_rocket_program")
+
+    validate_layout_parser = subparsers.add_parser(
+        "validate-layout-candidate",
+        help="Place a simulation candidate in a disposable sandbox surface and record validation feedback",
+    )
+    validate_layout_parser.add_argument("--candidate-id", required=True)
+    validate_layout_parser.add_argument("--variant", choices=["before", "after"], default="after")
+    validate_layout_parser.add_argument("--objective", default="launch_rocket_program")
+    validate_layout_parser.add_argument("--ticks", type=int, default=3600)
+    validate_layout_parser.add_argument("--player", help="Preferred no-mod player name for observation")
+    validate_layout_parser.add_argument("--no-cleanup", action="store_true", help="Leave the sandbox surface in the save")
 
     token_parser = subparsers.add_parser("record-token-usage", help="Append a Codex token usage sample")
     token_parser.add_argument("--tokens-used", type=int, required=True)
@@ -893,6 +905,29 @@ def main(argv: list[str] | None = None) -> None:
             }
         )
         serve_dashboard(cfg, host=args.host, port=args.port, objective=args.objective)
+        return
+
+    if args.command == "validate-layout-candidate":
+        try:
+            observation = ModlessLuaController(cfg).observe(player_name=args.player)
+            adapter = "no-mod-rcon-lua"
+        except Exception:
+            observation = FactorioController(cfg).observe()
+            adapter = "custom-mod-rcon"
+        feedback = validate_layout_candidate(
+            cfg,
+            observation,
+            candidate_id=args.candidate_id,
+            variant=args.variant,
+            ticks=max(0, args.ticks),
+            cleanup=not args.no_cleanup,
+        )
+        feedback["ok"] = feedback.get("sandbox_validation", {}).get("status") == "pass"
+        feedback["adapter"] = adapter
+        feedback["log_path"] = str(cfg.log_dir / "layout-validation-feedback.jsonl")
+        print_json(feedback)
+        if not feedback["ok"]:
+            raise SystemExit(1)
         return
 
     if args.command == "record-token-usage":

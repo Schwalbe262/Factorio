@@ -1,10 +1,10 @@
 # Factorio Automation CLI Handoff
 
-Last updated: 2026-06-14 KST
+Last updated: 2026-06-14 19:52 KST
 Repository: `C:\Users\NEC\Documents\Factorio`
 GitHub: `https://github.com/Schwalbe262/Factorio_automation`
 Current branch: `master`
-Last pushed base before this handoff: `8502dbe Part 64: run idle layout loop and compare blueprints`
+Last pushed base before this handoff: `24df048 Part 65: validate layout blueprints and add CLI handoff`
 
 ## Goal
 
@@ -67,7 +67,7 @@ Part 64 introduced:
 - `/factorio/blueprint` and `/api/factorio/blueprint` copy endpoints.
 - External copy smoke tests against `27.115.156.173:8787`.
 
-Current uncommitted handoff work fixes the latest blueprint issues:
+Part 65 fixed the latest blueprint issues and is already pushed:
 
 - `src/factorio_ai/monitor.py`
   - Site blueprint export now filters entities by site kind.
@@ -92,6 +92,48 @@ Current uncommitted handoff work fixes the latest blueprint issues:
   - Smelting before blueprint uses a compact representative cluster.
   - Green-circuit candidate static validation passes.
   - Dashboard renders validation status.
+
+Part 66 work implements the sandbox validation path:
+
+- `src/factorio_ai/layout_validation.py`
+  - New disposable sandbox validator for simulation candidate blueprints.
+  - Decodes the candidate blueprint, places entities on a temporary surface, powers the sandbox with substations/solar plus a pole grid, feeds inferred terminal inputs onto belts, waits real server ticks, inspects machine/inserter status, observed items, power, build failures, and output counts, then cleans up the surface.
+  - Writes feedback rows to `logs/layout-validation-feedback.jsonl`.
+  - Merges latest sandbox feedback back into layout candidate dictionaries as `sandbox_validation`, timestamp, and lesson.
+
+- `src/factorio_ai/cli.py`
+  - Adds:
+
+    ```powershell
+    $env:PYTHONPATH='src'
+    python -m factorio_ai.cli validate-layout-candidate --candidate-id green-circuit-3-cable-2-circuit-cell --variant after --ticks 3600 --player r1jae
+    ```
+
+  - The command exits nonzero when the sandbox result is `fail`; this is intentional so CI/operators notice failed candidates.
+
+- `src/factorio_ai/controller.py`, `src/factorio_ai/remote_slurm.py`, `src/factorio_ai/slurm_worker.py`
+  - Background layout requests now include compact `layout_validation_feedback`.
+  - Slurm compact payloads include candidate `sandbox_validation`, recent lesson text, observed outputs, machine count, inserter count, and failure reasons.
+  - Heuristic layout selection avoids sandbox-validation failures and surfaces sandbox reasons as risks.
+
+- `src/factorio_ai/web_dashboard.py`
+  - Dashboard candidate cards now show a separate `Sandbox` validation row when feedback exists.
+  - The dashboard state merges latest rows from `logs/layout-validation-feedback.jsonl` into current candidates.
+
+- Tests added/updated:
+  - `tests/test_layout_validation.py`
+  - `tests/test_slurm_worker.py`
+  - `tests/test_web_dashboard.py`
+
+Current Part 66 live finding:
+
+- Static validation still reports `green-circuit-3-cable-2-circuit-cell` as `pass`.
+- Sandbox validation reports `fail`.
+- Latest live smoke wrote this useful lesson to `logs/layout-validation-feedback.jsonl`:
+  - expected output `electronic-circuit` was not observed.
+  - sandbox fed `copper-plate` and `iron-plate`, all 5 assemblers and all 12 inserters were powered.
+  - inserters still waited for source items, so pickup lane, inserter orientation, or belt side is likely unreachable.
+  - Do not mark this green-circuit candidate build-ready until a revised layout passes sandbox ticks.
 
 ## Verification Already Run
 
@@ -125,6 +167,33 @@ pytest -q
 
 Result: `314 passed`
 
+Part 66 focused tests:
+
+```powershell
+$env:PYTHONPATH='src'
+pytest -q tests\test_layout_validation.py tests\test_slurm_worker.py tests\test_web_dashboard.py
+```
+
+Result: `19 passed`
+
+Part 66 full test suite:
+
+```powershell
+$env:PYTHONPATH='src'
+pytest -q
+```
+
+Result: `317 passed`
+
+Part 66 token usage sample:
+
+```powershell
+$env:PYTHONPATH='src'
+python -m factorio_ai.cli record-token-usage --tokens-used 35141439 --label "part66 sandbox layout validation"
+```
+
+Result: appended `delta_tokens=234991` to `logs/token_usage.jsonl`, which is read by the web dashboard token graph.
+
 ## Live Smoke Checks Already Run
 
 Dashboard:
@@ -149,20 +218,18 @@ Current generated candidate inspection from dashboard state:
 
 ## Important Caveat: Blueprint Validation
 
-The current validation is static, not a full Factorio simulation.
+Part 66 adds a first sandbox validation path, but it is still an early validator, not a complete production simulator.
 
-It checks whether each assembler has enough apparent input inserters and an output inserter to a belt/chest/machine. This catches obvious "inserter missing or wrong side" issues, but it does not yet prove real operation.
+Completed now:
 
-Next required feature:
-
-1. Create a disposable sandbox validation path for blueprint candidates.
-2. Import/place a candidate blueprint into a temporary save or isolated area.
-3. Feed controlled input items.
-4. Run ticks.
-5. Inspect machine status, item movement, output counts, power, collision/buildability, and belt/inserter throughput.
-6. Write results to `logs/layout-validation-feedback.jsonl`.
-7. Add failed candidate feedback to future LLM payloads.
-8. Convert validation feedback into fine-tuning examples later.
+1. Create a disposable sandbox validation path for blueprint candidates: done.
+2. Import/place a candidate blueprint into a temporary isolated surface: done.
+3. Feed controlled input items: done for inferred terminal inputs on source belt lanes.
+4. Run ticks: done by waiting real server ticks.
+5. Inspect machine status, item movement, output counts, power, collision/buildability, and belt/inserter throughput: partially done. Current output includes build failures, observed outputs, input insertions, machine statuses, inserter statuses, powered machine/inserter counts, and ticks.
+6. Write results to `logs/layout-validation-feedback.jsonl`: done.
+7. Add failed candidate feedback to future LLM payloads: done for background layout Slurm payloads.
+8. Convert validation feedback into fine-tuning examples later: not done.
 
 Proposed feedback JSONL shape:
 
@@ -189,32 +256,28 @@ This file can later be transformed into Qwen fine-tuning examples.
 
 ## Next Implementation Priority
 
-Continue from the current uncommitted changes:
+If Part 66 is not yet committed/pushed, finish it first:
 
-1. Run full tests after the Slurm payload patch.
-2. If tests pass, record token usage.
-3. Commit and push this part, likely:
+1. Record token usage for Part 66 with `python -m factorio_ai.cli record-token-usage ...`.
+2. Commit and push Part 66:
 
 ```powershell
-git add src/factorio_ai/monitor.py src/factorio_ai/planner.py src/factorio_ai/slurm_worker.py src/factorio_ai/web_dashboard.py tests/test_planner.py tests/test_web_dashboard.py docs/CLI_HANDOFF.md logs/token_usage.jsonl
-git commit -m "Part 65: validate layout blueprints and add CLI handoff"
+git add src/factorio_ai/layout_validation.py src/factorio_ai/cli.py src/factorio_ai/controller.py src/factorio_ai/remote_slurm.py src/factorio_ai/slurm_worker.py src/factorio_ai/web_dashboard.py tests/test_layout_validation.py tests/test_slurm_worker.py tests/test_web_dashboard.py docs/CLI_HANDOFF.md
+git commit -m "Part 66: sandbox validate layout candidates"
 git push origin master
 ```
 
-Then implement the sandbox validator described above.
+Then use the new sandbox feedback to fix the green-circuit candidate itself:
 
-Suggested first API:
+1. Revise `green-circuit-3-cable-2-circuit-cell` so source belts, belt sides, inserter pickup positions, direct/belt cable transfer, output inserters, and power coverage actually produce `electronic-circuit` in sandbox ticks.
+2. Rerun:
 
 ```powershell
 $env:PYTHONPATH='src'
-python -m factorio_ai.cli validate-layout-candidate --candidate-id green-circuit-3-cable-2-circuit-cell --variant after --ticks 3600
+python -m factorio_ai.cli validate-layout-candidate --candidate-id green-circuit-3-cable-2-circuit-cell --variant after --ticks 3600 --player r1jae
 ```
 
-Suggested result:
-
-- Writes `logs/layout-validation-feedback.jsonl`
-- Updates dashboard layout candidate card with `sandbox_validation`
-- Sends compact failure reason to Slurm LLM layout payload.
+3. Only mark the candidate build-ready after sandbox validation passes.
 
 ## Core Commands
 
