@@ -1167,7 +1167,7 @@ class CopperPlateSkill:
             return self.support_skill._mine_resource(player, coal, "coal", 8)
 
         if copper_furnace is None:
-            furnaces = entities_named(observation, "stone-furnace")
+            furnaces = _entities_within_starter_area(observation, entities_named(observation, "stone-furnace"))
             free_furnaces = [item for item in furnaces if not _is_iron_busy_furnace(item)]
             if free_furnaces:
                 copper_furnace = _nearest_to(free_furnaces, _position(copper))
@@ -2183,7 +2183,7 @@ def _stand_position(target: dict[str, float], offset: float = 2.0) -> dict[str, 
 
 
 def _select_copper_furnace(observation: dict[str, Any]) -> dict[str, Any] | None:
-    furnaces = entities_named(observation, "stone-furnace")
+    furnaces = _entities_within_starter_area(observation, entities_named(observation, "stone-furnace"))
     for item in furnaces:
         if entity_item_count(item, "copper-plate") > 0 or entity_item_count(item, "copper-ore") > 0:
             return item
@@ -2199,7 +2199,7 @@ def _select_copper_furnace(observation: dict[str, Any]) -> dict[str, Any] | None
 
 
 def _select_iron_furnace(observation: dict[str, Any]) -> dict[str, Any] | None:
-    furnaces = entities_named(observation, "stone-furnace")
+    furnaces = _entities_within_starter_area(observation, entities_named(observation, "stone-furnace"))
     for item in furnaces:
         if _is_iron_busy_furnace(item):
             return item
@@ -2233,6 +2233,16 @@ def _near_position(
     radius: float,
 ) -> list[dict[str, Any]]:
     return [item for item in entities if distance(_position(item), position) <= radius]
+
+
+def _entities_within_starter_area(observation: dict[str, Any], entities: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        entity
+        for entity in entities
+        if isinstance(entity, dict)
+        and isinstance(entity.get("position"), dict)
+        and _within_starter_logistics_area(observation, _position(entity))
+    ]
 
 
 def _nearest_to(entities: list[dict[str, Any]], position: dict[str, float]) -> dict[str, Any] | None:
@@ -2297,11 +2307,20 @@ def _distance_to_starter_logistics_area(observation: dict[str, Any], position: d
 
 
 def _layout_center_position(layout: dict[str, Any]) -> dict[str, float]:
-    for key in ("furnace_position", "drill_position", "belt1_position"):
+    for key in (
+        "furnace_position",
+        "drill_position",
+        "belt1_position",
+        "lab_position",
+        "assembler_position",
+        "cable_assembler_position",
+        "circuit_assembler_position",
+        "pole_position",
+    ):
         value = layout.get(key)
         if isinstance(value, dict):
             return _xy_position(value)
-    for key in ("furnace", "drill", "belt1"):
+    for key in ("furnace", "drill", "belt1", "lab", "assembler", "cable_assembler", "circuit_assembler", "pole"):
         value = layout.get(key)
         if isinstance(value, dict):
             return _position(value)
@@ -2318,12 +2337,12 @@ def _layout_within_starter_area(
 
 
 def _select_mining_drill_for_resource(observation: dict[str, Any], resource_name: str) -> dict[str, Any] | None:
-    drills = [
-        item
-        for item in entities_named(observation, "burner-mining-drill") + entities_named(observation, "electric-mining-drill")
-        if _nearest_resource_to_position(observation, _position(item), resource_name) is not None
-        and distance(_position(item), _position(_nearest_resource_to_position(observation, _position(item), resource_name))) <= 4.5
-    ]
+    raw_drills = entities_named(observation, "burner-mining-drill") + entities_named(observation, "electric-mining-drill")
+    drills = []
+    for item in _entities_within_starter_area(observation, raw_drills):
+        nearest = _nearest_resource_to_position(observation, _position(item), resource_name)
+        if nearest is not None and distance(_position(item), _position(nearest)) <= 4.5:
+            drills.append(item)
     return _nearest_to(drills, _position(nearest_resource(observation, resource_name) or {"position": {"x": 0, "y": 0}})) if drills else None
 
 
@@ -4261,6 +4280,8 @@ def _select_lab_site(observation: dict[str, Any]) -> dict[str, Any] | None:
         if isinstance(site, dict)
         and isinstance(site.get("pole_position"), dict)
         and isinstance(site.get("lab_position"), dict)
+        and _within_starter_logistics_area(observation, _xy_position(site["lab_position"]))
+        and _within_starter_logistics_area(observation, _xy_position(site["pole_position"]))
     ]
     if not candidates:
         return None
@@ -4296,6 +4317,8 @@ def _find_circuit_automation_cell(observation: dict[str, Any]) -> dict[str, Any]
         layout["pole"] = _entity_near(observation, "small-electric-pole", layout["pole_position"], radius=1.0)
         if layout["pole"] is not None:
             layout["pole_unit_number"] = layout["pole"].get("unit_number")
+        if not _layout_within_starter_area(observation, layout):
+            continue
         return layout
 
     circuit_candidates = [item for item in assemblers if item.get("recipe") == "electronic-circuit"]
@@ -4318,6 +4341,8 @@ def _find_circuit_automation_cell(observation: dict[str, Any]) -> dict[str, Any]
         layout["pole"] = _entity_near(observation, "small-electric-pole", layout["pole_position"], radius=1.0)
         if layout["pole"] is not None:
             layout["pole_unit_number"] = layout["pole"].get("unit_number")
+        if not _layout_within_starter_area(observation, layout):
+            continue
         return layout
 
     unassigned = [item for item in assemblers if not item.get("recipe")]
@@ -4364,6 +4389,8 @@ def _find_circuit_automation_cell(observation: dict[str, Any]) -> dict[str, Any]
         layout["pole"] = _entity_near(observation, "small-electric-pole", layout["pole_position"], radius=1.0)
         if layout["pole"] is not None:
             layout["pole_unit_number"] = layout["pole"].get("unit_number")
+        if not _layout_within_starter_area(observation, layout):
+            continue
         return layout
 
     return None
@@ -4384,6 +4411,8 @@ def _select_circuit_automation_site(observation: dict[str, Any]) -> dict[str, An
             "transfer_inserter_position",
         ]
         if not all(isinstance(site.get(key), dict) for key in required):
+            continue
+        if not all(_within_starter_logistics_area(observation, _xy_position(site[key])) for key in required):
             continue
         candidates.append(
             {
@@ -4472,13 +4501,19 @@ def _circuit_cell_powered(line: dict[str, Any]) -> bool:
 
 def _find_build_item_mall_cell(observation: dict[str, Any], target_item: str) -> dict[str, Any] | None:
     assemblers = entities_named(observation, "assembling-machine-1")
-    candidates = [item for item in assemblers if item.get("recipe") == target_item]
+    candidates = [
+        item
+        for item in assemblers
+        if item.get("recipe") == target_item
+        and _within_starter_logistics_area(observation, _position(item))
+    ]
     if not candidates:
         candidates = [
             item
             for item in assemblers
             if not item.get("recipe")
             and not _near_recipe_assembler(observation, item, {"copper-cable", "electronic-circuit"}, radius=5.5)
+            and _within_starter_logistics_area(observation, _position(item))
         ]
     if not candidates:
         return None
@@ -4512,6 +4547,11 @@ def _select_build_item_mall_site(observation: dict[str, Any]) -> dict[str, Any] 
             continue
         pole_position = _xy_position(site["pole_position"])
         assembler_position = _xy_position(site["cable_assembler_position"])
+        if not (
+            _within_starter_logistics_area(observation, pole_position)
+            and _within_starter_logistics_area(observation, assembler_position)
+        ):
+            continue
         pole = _entity_near(observation, "small-electric-pole", pole_position, radius=1.0)
         assembler = _entity_near(observation, "assembling-machine-1", assembler_position, radius=1.5)
         candidates.append(

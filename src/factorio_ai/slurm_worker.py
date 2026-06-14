@@ -183,19 +183,44 @@ def run_planner_request(payload: dict[str, Any]) -> dict[str, Any]:
 
 def run_strategy_request(payload: dict[str, Any]) -> dict[str, Any]:
     llm_result, llm_diagnostics = try_llm_strategy_with_diagnostics(payload)
-    if llm_result is not None:
-        llm_result["source"] = "llm"
-        llm_result.update(llm_diagnostics)
-        return llm_result
-    result = heuristic_strategy(
+    heuristic_result = heuristic_strategy(
         objective=str(payload.get("objective") or payload.get("goal") or "launch_rocket_program"),
         observation=payload.get("observation") if isinstance(payload.get("observation"), dict) else {},
         production_targets=payload.get("production_targets") if isinstance(payload.get("production_targets"), dict) else {},
     )
+    if llm_result is not None:
+        llm_result = _augment_llm_strategy_with_heuristic_support(llm_result, heuristic_result)
+        llm_result["source"] = "llm"
+        llm_result.update(llm_diagnostics)
+        return llm_result
+    result = heuristic_result
     result["source"] = "heuristic"
     result["ok"] = True
     result.update({key: value for key, value in llm_diagnostics.items() if value not in (None, "")})
     return result
+
+
+def _augment_llm_strategy_with_heuristic_support(llm_result: dict[str, Any], heuristic_result: dict[str, Any]) -> dict[str, Any]:
+    output = dict(llm_result)
+    llm_skill = str(output.get("selected_skill") or "")
+    heuristic_skill = str(heuristic_result.get("selected_skill") or "")
+    missing_reason = not str(output.get("reason") or "").strip()
+    missing_evidence = not output.get("evidence")
+    if missing_reason or missing_evidence:
+        output["quality_warning"] = "LLM returned sparse justification; attached deterministic monitor evidence"
+        output["heuristic_selected_skill"] = heuristic_skill
+        output["heuristic_reason"] = heuristic_result.get("reason")
+        output["heuristic_evidence"] = heuristic_result.get("evidence")
+        if llm_skill == heuristic_skill:
+            output["priority"] = max(_int_value(output.get("priority"), 50), _int_value(heuristic_result.get("priority"), 50))
+            output["blockers"] = output.get("blockers") or heuristic_result.get("blockers")
+            if missing_reason:
+                output["reason"] = heuristic_result.get("reason")
+                output["reason_source"] = "heuristic_support"
+            if missing_evidence:
+                output["evidence"] = heuristic_result.get("evidence")
+                output["evidence_source"] = "heuristic_support"
+    return output
 
 
 def run_layout_improvement_request(payload: dict[str, Any]) -> dict[str, Any]:
@@ -317,6 +342,11 @@ def run_strategy_model_benchmark(payload: dict[str, Any]) -> dict[str, Any]:
                     "reason": result.get("reason"),
                     "llm_error": result.get("llm_error", ""),
                     "llm_prompt_chars": result.get("llm_prompt_chars"),
+                    "llm_initial_error": result.get("llm_initial_error", ""),
+                    "llm_initial_prompt_chars": result.get("llm_initial_prompt_chars"),
+                    "llm_retry": result.get("llm_retry", ""),
+                    "quality_warning": result.get("quality_warning", ""),
+                    "llm_max_tokens": result.get("llm_max_tokens"),
                     "llm_response_snippet": result.get("llm_response_snippet", ""),
                 }
             )
@@ -350,6 +380,7 @@ def try_llm_planner(payload: dict[str, Any]) -> dict[str, Any] | None:
             {"role": "user", "content": prompt},
         ],
         "temperature": 0,
+        "max_tokens": _llm_max_tokens(),
         "response_format": {"type": "json_object"},
     }
     if os.getenv("FACTORIO_AI_LLM_GUIDED_JSON", "").lower() in {"1", "true", "yes", "on"}:
@@ -399,13 +430,7 @@ def try_llm_strategy_with_diagnostics(payload: dict[str, Any]) -> tuple[dict[str
         "Never emit tick-level actions. selected_skill must exactly match one entry from allowed_skill_names. "
         "Do not answer a per-minute production deficit with repeated hand crafting when an automation skill exists."
     )
-    prompt = (
-        "You are the strategic layer for a Factorio autoplayer. "
-        "Pick the next high-level skill and justify it from the observation. "
-        "Only choose selected_skill from allowed_skill_names. "
-        "Return strict JSON only matching the schema.\n\n"
-        f"Payload:\n{json.dumps(base_payload, ensure_ascii=False)}"
-    )
+    prompt = _strategy_prompt(base_payload)
     diagnostics: dict[str, Any] = {
         "llm_prompt_chars": len(prompt),
     }
@@ -415,6 +440,21 @@ def try_llm_strategy_with_diagnostics(payload: dict[str, Any]) -> tuple[dict[str
         schema=STRATEGY_RESPONSE_SCHEMA,
     )
     diagnostics.update(call_diagnostics)
+    if parsed is None and _context_limit_error(str(diagnostics.get("llm_error") or "")):
+        retry_payload = ultra_compact_strategy_payload(base_payload)
+        retry_prompt = _strategy_prompt(retry_payload)
+        diagnostics["llm_initial_error"] = diagnostics.get("llm_error")
+        diagnostics["llm_initial_prompt_chars"] = diagnostics.get("llm_prompt_chars")
+        diagnostics["llm_retry"] = "ultra_compact_strategy_payload"
+        diagnostics["llm_prompt_chars"] = len(retry_prompt)
+        parsed, retry_diagnostics = call_llm_json_with_diagnostics(
+            system="Return strict JSON only. You choose strategy, not direct world actions.",
+            prompt=retry_prompt,
+            schema=STRATEGY_RESPONSE_SCHEMA,
+        )
+        diagnostics.update(retry_diagnostics)
+        if parsed is not None and not retry_diagnostics.get("llm_error"):
+            diagnostics["llm_error"] = ""
     if parsed is None:
         diagnostics.setdefault("llm_error", "LLM unavailable or invalid JSON response")
         return None, diagnostics
@@ -425,6 +465,21 @@ def try_llm_strategy_with_diagnostics(payload: dict[str, Any]) -> tuple[dict[str
         diagnostics["llm_error"] = f"selected_skill not allowed: {normalized.get('selected_skill')}"
         return None, diagnostics
     return normalized, diagnostics
+
+
+def _strategy_prompt(payload: dict[str, Any]) -> str:
+    return (
+        "You are the strategic layer for a Factorio autoplayer. "
+        "Pick the next high-level skill and justify it from the observation. "
+        "Only choose selected_skill from allowed_skill_names. "
+        "Return strict JSON only matching the schema.\n\n"
+        f"Payload:\n{json.dumps(payload, ensure_ascii=False)}"
+    )
+
+
+def _context_limit_error(message: str) -> bool:
+    lowered = message.lower()
+    return "context length" in lowered or "maximum context" in lowered or "reduce the length" in lowered
 
 
 def call_llm_json(system: str, prompt: str, schema: dict[str, Any] | None = None) -> dict[str, Any] | None:
@@ -448,6 +503,7 @@ def call_llm_json_with_diagnostics(
             {"role": "user", "content": prompt},
         ],
         "temperature": 0,
+        "max_tokens": _llm_max_tokens(),
         "response_format": {"type": "json_object"},
     }
     if schema and os.getenv("FACTORIO_AI_LLM_GUIDED_JSON", "").lower() in {"1", "true", "yes", "on"}:
@@ -484,7 +540,11 @@ def call_llm_json_with_diagnostics(
             "llm_error": "LLM response content is not a JSON object",
             "llm_response_snippet": _snippet(content),
         }
-    return parsed, {"llm_response_snippet": _snippet(content)}
+    return parsed, {"llm_response_snippet": _snippet(content), "llm_max_tokens": _llm_max_tokens()}
+
+
+def _llm_max_tokens() -> int:
+    return max(64, min(4096, _int_value(os.getenv("FACTORIO_AI_LLM_MAX_TOKENS"), 512)))
 
 
 def compact_strategy_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -543,6 +603,53 @@ def compact_strategy_payload(payload: dict[str, Any]) -> dict[str, Any]:
             "When no urgent build/research/defense task exists, use idle LLM cycles for site layout simulation and improvement planning.",
         ],
         "decision_rule": payload.get("decision_rule"),
+    }
+
+
+def ultra_compact_strategy_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    monitor = payload.get("factory_monitor") if isinstance(payload.get("factory_monitor"), dict) else {}
+    target_status = monitor.get("target_status") if isinstance(monitor.get("target_status"), dict) else {}
+    target_items = target_status.get("items") if isinstance(target_status.get("items"), list) else payload.get("target_status")
+    if not isinstance(target_items, list):
+        target_items = []
+    bottlenecks = monitor.get("bottlenecks") if isinstance(monitor.get("bottlenecks"), list) else payload.get("bottlenecks")
+    if not isinstance(bottlenecks, list):
+        bottlenecks = []
+    layout = payload.get("layout_improvement") if isinstance(payload.get("layout_improvement"), dict) else {}
+    threats = payload.get("threats") if isinstance(payload.get("threats"), dict) else {}
+    research = payload.get("research") if isinstance(payload.get("research"), dict) else {}
+    available_skills = payload.get("available_skills") if isinstance(payload.get("available_skills"), list) else []
+    return {
+        "objective": payload.get("objective"),
+        "inventory": _dict_head(payload.get("inventory"), 12),
+        "production_targets": _dict_head(payload.get("production_targets"), 12),
+        "target_deficits": [
+            _compact_dict(item, ("item", "target_per_minute", "estimated_per_minute", "usable_per_minute", "deficit_per_minute"))
+            for item in target_items[:8]
+            if isinstance(item, dict)
+        ],
+        "bottlenecks": [
+            _compact_dict(item, ("item", "severity", "reason", "required_by"))
+            for item in bottlenecks[:6]
+            if isinstance(item, dict)
+        ],
+        "layout_recommended_skill": layout.get("recommended_skill"),
+        "threats": _compact_dict(
+            threats,
+            ("enemy_count", "danger_level", "nearest_enemy", "armed_gun_turret_count", "recent_enemy_damage_count"),
+        ),
+        "current_research": research.get("current") or payload.get("current_research"),
+        "researched_technologies": payload.get("researched_technologies") or _compact_dict(research, ("researched",)),
+        "allowed_skill_names": payload.get("allowed_skill_names"),
+        "available_skills": [
+            _compact_dict(item, ("name", "executor", "role"))
+            for item in available_skills[:24]
+            if isinstance(item, dict)
+        ],
+        "rule": (
+            "Choose exactly one allowed skill. Use bottlenecks and target_deficits. "
+            "Prefer automation skills for per-minute deficits; use defense only for urgent threats."
+        ),
     }
 
 

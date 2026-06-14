@@ -101,6 +101,13 @@ Tune the current guard with
 `FACTORIO_AI_REAL_PLAYER_ENEMY_TARGET_RADIUS`, and
 `FACTORIO_AI_REAL_PLAYER_ENEMY_PATH_RADIUS`.
 
+The strict real-player strategy loop now checks near-player enemy pressure before
+LLM strategy or executor work. If an enemy is inside the stop radius, it sends a
+`stop` action, records an `execution_guard` strategy result with
+`build_starter_defense`, and fails the cycle. This prevents another long LLM or
+skill cycle from running while a biter is already close enough to kill the
+character.
+
 ## Slurm LLM Workers
 
 The project currently owns its Factorio-specific workers rather than depending
@@ -162,11 +169,13 @@ python -m factorio_ai.cli slurm-compare-strategy-workers --objective launch_rock
 
 The latest live comparison showed:
 
-- 4B worker ready, model `Qwen/Qwen3.5-4B`, returned LLM source and selected
-  `expand_copper_smelting`.
-- 9B worker ready, model `Qwen/Qwen3.5-9B`, but the actual request hit a
-  runtime 4096-token context limit and fell back to heuristic
-  `expand_copper_smelting`.
+- 4B worker ready, model `Qwen/Qwen3.5-4B`, returned LLM source and selected a
+  valid production skill.
+- 9B worker ready, model `Qwen/Qwen3.5-9B`. The normal prompt can still hit the
+  runtime 4096-token context limit, but the worker retries with
+  `ultra_compact_strategy_payload`, sets `max_tokens` explicitly, and can return
+  an LLM strategy result. The initial context error remains in
+  `llm_initial_error`; `llm_error` is empty after a successful compact retry.
 - 27B worker has three RTX 6000 Ada GPUs allocated for
   `Qwen/Qwen3.6-27B-FP8`, but the OpenAI-compatible endpoint is not serving yet.
 
@@ -232,7 +241,10 @@ After the LLM response, `reconcile_strategy_decision` applies deterministic
 guardrails. Example: if the LLM selects `produce_electronic_circuit` for a
 per-minute electronic-circuit deficit after Automation is researched, the
 decision is promoted to `automate_electronic_circuit_line`. This preserves the
-LLM source but prevents strategic regression into repeated hand crafting.
+LLM source but prevents strategic regression into repeated hand crafting. The
+promotion now applies even if an isolated or remote circuit cell exists, because
+the monitor's starter-usable target deficit means hand production is still the
+wrong sustained-rate response.
 
 ## Implemented Skill Executors
 
@@ -303,6 +315,14 @@ The current no-mod observation has recently shown:
   executor. It builds an output belt and burner mining drill on a coal patch,
   inserts starter coal, and lets the monitor classify the result as a fueled
   `mining_patch` coal site.
+- New lab, circuit automation, and build-item-mall executor site selection now
+  ignores starter-phase candidates outside the starter logistics radius. The
+  current map contains older remote blocks hundreds of tiles away; treat those
+  as layout problems or future rail outposts, not as valid local starter sites.
+- Bootstrap iron/copper support selection also ignores remote furnaces and
+  miners before rail logistics. This matters because expansion skills call
+  `IronPlateSkill` / `CopperPlateSkill` for prerequisites; those support calls
+  must not walk the real player back to old remote plate outputs.
 - Live no-mod verification:
   - command:
     `python -m factorio_ai.cli run-no-mod-strategy-step --objective launch_rocket_program --max-steps 30`;

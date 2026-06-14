@@ -1563,6 +1563,27 @@ class ModlessFactorioController(FactorioController):
                         "execution": observation.get("execution"),
                     },
                 )
+            threat = _real_player_enemy_action_threat(observation, {"type": "wait", "ticks": 1})
+            if threat:
+                stop_response = self._modless.act(
+                    {"type": "stop"},
+                    player_name=self._configured_agent_player_name(),
+                )
+                return StrategyStepSummary(
+                    ok=False,
+                    reason=threat,
+                    objective=objective,
+                    selected_skill="build_starter_defense",
+                    strategy={
+                        "selected_skill": "build_starter_defense",
+                        "source": "execution_guard",
+                        "reason": threat,
+                        "expected_effect": "Pause real-player movement before enemy contact kills the character.",
+                        "player": observation.get("player"),
+                        "execution": observation.get("execution"),
+                        "stop_response": stop_response,
+                    },
+                )
         return super().run_strategy_step(
             objective=objective,
             require_llm=require_llm,

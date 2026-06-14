@@ -530,6 +530,58 @@ class ControllerTests(unittest.TestCase):
         self.assertIn("enemy small-biter", response["reason"])
         self.assertIn("near player", response["reason"])
 
+    def test_no_mod_strategy_step_strict_real_player_stops_before_near_enemy_cycle(self):
+        class FakeModless:
+            def __init__(self):
+                self.actions = []
+
+            def act(self, action, player_name=None):
+                self.actions.append((action, player_name))
+                return {"ok": True, "action": action.get("type")}
+
+        class FakeController(ModlessFactorioController):
+            def observe(self):
+                return {
+                    "ok": True,
+                    "tick": 1,
+                    "player": {
+                        "name": "r1jae",
+                        "kind": "player",
+                        "position": {"x": 0.0, "y": 0.0},
+                        "character_valid": True,
+                        "controller_is_character": True,
+                    },
+                    "execution": {
+                        "mode": "player",
+                        "virtual": False,
+                        "character_valid": True,
+                        "controller_is_character": True,
+                    },
+                    "enemies": [
+                        {
+                            "name": "small-biter",
+                            "type": "unit",
+                            "position": {"x": 12.0, "y": 0.0},
+                        }
+                    ],
+                }
+
+            def strategy_decision(self, *args, **kwargs):
+                raise AssertionError("enemy execution guard should run before LLM strategy")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = FakeController(make_test_config(Path(temp_dir)))
+            fake_modless = FakeModless()
+            controller._modless = fake_modless
+            with patch.dict("os.environ", {"FACTORIO_AI_REQUIRE_REAL_PLAYER": "1"}):
+                summary = controller.run_strategy_step("launch_rocket_program", require_llm=True)
+
+        self.assertFalse(summary.ok)
+        self.assertEqual(summary.selected_skill, "build_starter_defense")
+        self.assertEqual(summary.strategy["source"], "execution_guard")
+        self.assertIn("near player", summary.reason)
+        self.assertEqual(fake_modless.actions[0][0]["type"], "stop")
+
     def test_no_mod_action_strict_real_player_pauses_path_near_enemy(self):
         class FakeController(ModlessFactorioController):
             def observe(self):

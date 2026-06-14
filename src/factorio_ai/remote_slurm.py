@@ -811,6 +811,13 @@ def compare_strategy_workers(
                         "blockers": decision.get("blockers"),
                         "evidence": decision.get("evidence"),
                         "llm_error": decision.get("llm_error") or decision.get("error") or "",
+                        "llm_prompt_chars": decision.get("llm_prompt_chars"),
+                        "llm_initial_error": decision.get("llm_initial_error") or "",
+                        "llm_initial_prompt_chars": decision.get("llm_initial_prompt_chars"),
+                        "llm_retry": decision.get("llm_retry") or "",
+                        "quality_warning": decision.get("quality_warning") or "",
+                        "llm_max_tokens": decision.get("llm_max_tokens"),
+                        "llm_response_snippet": decision.get("llm_response_snippet") or "",
                     }
                 )
         except Exception as exc:  # noqa: BLE001

@@ -194,6 +194,9 @@ target, or the planned movement segment. The default stop radii can be tuned wit
 `FACTORIO_AI_REAL_PLAYER_ENEMY_PATH_RADIUS`. If the selected real player is in Factorio remote/map
 controller mode but still has a valid character, the controller first runs the allowlisted
 `restore_character_controller` action and then re-observes before executing the requested action.
+The strategy loop also checks the same near-enemy condition before calling the LLM or executor; if a
+biter is already close to the real player, it sends a `stop` action and records an execution-guard
+failure instead of letting the character stand there during another planning cycle.
 
 Create the save and start the LAN/RCON server:
 
@@ -755,6 +758,20 @@ The command appends `logs/strategy-worker-comparison.jsonl`, and the dashboard s
 worker comparison under the LLM decision log. This makes it visible when a worker is ready but falls
 back because of runtime context limits, or when the 27B worker has GPUs allocated but the endpoint is
 not serving yet.
+
+Strategy worker calls set `max_tokens` explicitly with `FACTORIO_AI_LLM_MAX_TOKENS` defaulting to
+512. If the active vLLM runtime rejects the normal strategy prompt for context length, the worker
+retries once with `ultra_compact_strategy_payload` and records `llm_initial_error`,
+`llm_initial_prompt_chars`, and `llm_retry` so the dashboard can distinguish a successful compact
+LLM decision from the earlier full-prompt context failure.
+
+During the burner/electric transition, deterministic executors must avoid creating new lab, green
+circuit, or build-item-mall blocks outside the starter logistics radius before rail logistics exist.
+Remote blocks are still shown as layout issues and simulation candidates, but new starter execution
+should choose local powered/wireable sites or fail clearly instead of walking hundreds of tiles into
+enemy pressure. Bootstrap iron/copper support also ignores remote furnaces and miners for collection
+or insertion before rail logistics exist, so old scattered sites do not pull the real player into
+dangerous long walks.
 
 ## GitHub Workflow
 

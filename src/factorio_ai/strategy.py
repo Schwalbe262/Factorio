@@ -629,7 +629,6 @@ def reconcile_strategy_decision(
         selected == "produce_electronic_circuit"
         and _technology_researched(observation, "automation")
         and _target_deficit_exists(objective, observation, production_targets, "electronic-circuit")
-        and not _circuit_automation_ready(observation)
     ):
         adjusted = dict(decision)
         adjusted["selected_skill"] = "automate_electronic_circuit_line"
@@ -637,7 +636,7 @@ def reconcile_strategy_decision(
         original_reason = str(decision.get("reason") or "").strip()
         guardrail_reason = (
             "LLM selected hand circuit production for a per-minute electronic-circuit deficit, "
-            "but Automation is researched and no powered circuit cell is ready."
+            "but Automation is researched and hand crafting cannot satisfy a sustained rate target."
         )
         adjusted["reason"] = f"{guardrail_reason} {original_reason}".strip()
         adjusted["blockers"] = sorted(set(_string_list(decision.get("blockers")) + ["assembler-based electronic circuit production"]))
@@ -645,7 +644,7 @@ def reconcile_strategy_decision(
             "guardrail_adjusted_from=produce_electronic_circuit",
             "automation_researched=true",
             "electronic_circuit_target_deficit=true",
-            "circuit_automation_ready=false",
+            "hand_crafting_not_rate_solution=true",
         ]
         adjusted["expected_effect"] = (
             "Build the first powered assembler cell for electronic circuits instead of repeatedly hand-crafting circuits."

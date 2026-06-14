@@ -465,6 +465,24 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["name"], "stone-furnace")
         self.assertEqual(decision.action["position"], {"x": 103.0, "y": 0.0})
 
+    def test_iron_skill_ignores_remote_furnace_output_before_rail(self):
+        obs = base_observation()
+        obs["base"] = {"spawn_position": {"x": 0, "y": 0}, "anchor_position": {"x": 0, "y": 0}}
+        obs["inventory"] = {"coal": 8, "stone-furnace": 1, "burner-mining-drill": 1}
+        obs["entities"] = [
+            {
+                "name": "stone-furnace",
+                "unit_number": 910,
+                "position": {"x": 420, "y": -400},
+                "distance": 580,
+                "inventories": {"2": {"iron-plate": 20}},
+            }
+        ]
+        decision = IronPlateSkill(target_count=30).next_action(obs)
+        self.assertNotEqual(decision.action.get("position"), {"x": 420.0, "y": -400.0})
+        if decision.action["type"] == "move_to":
+            self.assertLess(abs(decision.action["position"]["x"]), 50)
+
     def test_science_skill_crafts_science_when_prerequisites_exist(self):
         obs = base_observation()
         obs["inventory"] = {
@@ -556,6 +574,24 @@ class PlannerTests(unittest.TestCase):
         decision = CopperPlateSkill(target_count=5).next_action(obs)
         self.assertEqual(decision.action["type"], "build")
         self.assertEqual(decision.action["name"], "stone-furnace")
+
+    def test_copper_skill_ignores_remote_furnace_output_before_rail(self):
+        obs = base_observation()
+        obs["base"] = {"spawn_position": {"x": 0, "y": 0}, "anchor_position": {"x": 0, "y": 0}}
+        obs["inventory"] = {"coal": 8, "stone-furnace": 1}
+        obs["entities"] = [
+            {
+                "name": "stone-furnace",
+                "unit_number": 911,
+                "position": {"x": 420, "y": -400},
+                "distance": 580,
+                "inventories": {"2": {"copper-plate": 20}},
+            }
+        ]
+        decision = CopperPlateSkill(target_count=30).next_action(obs)
+        self.assertNotEqual(decision.action.get("position"), {"x": 420.0, "y": -400.0})
+        if decision.action["type"] == "move_to":
+            self.assertLess(abs(decision.action["position"]["x"]), 50)
 
     def test_electronic_circuit_skill_done_when_target_reached(self):
         obs = base_observation()
@@ -1458,6 +1494,24 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["type"], "build")
         self.assertEqual(decision.action["name"], "lab")
 
+    def test_research_automation_ignores_remote_lab_site_before_rail(self):
+        obs = powered_research_observation()
+        obs["base"] = {"spawn_position": {"x": 0, "y": 0}, "anchor_position": {"x": 0, "y": 0}}
+        obs["research"]["current"] = "automation"
+        obs["inventory"]["lab"] = 1
+        obs["lab_sites"] = [
+            {
+                "powered": True,
+                "pole_unit_number": 604,
+                "pole_position": {"x": 420.5, "y": -400.5},
+                "lab_position": {"x": 423.5, "y": -400.5},
+                "distance": 3,
+            }
+        ]
+        decision = ResearchAutomationSkill().next_action(obs)
+        self.assertIsNone(decision.action)
+        self.assertIn("cannot find a powered or wireable lab site", decision.reason)
+
     def test_research_automation_does_not_build_lab_until_circuits_are_ready(self):
         obs = powered_research_observation()
         obs["research"]["current"] = "automation"
@@ -1723,6 +1777,42 @@ class PlannerTests(unittest.TestCase):
         self.assertTrue(decision.done)
         self.assertIsNone(decision.action)
 
+    def test_circuit_automation_ignores_remote_existing_cell_before_rail(self):
+        obs = powered_automation_observation()
+        obs["base"] = {"spawn_position": {"x": 0, "y": 0}, "anchor_position": {"x": 0, "y": 0}}
+        obs["inventory"] = {"assembling-machine-1": 2, "inserter": 1}
+        for entity in circuit_cell_entities():
+            remote = dict(entity)
+            remote["position"] = {
+                "x": entity["position"]["x"] + 420,
+                "y": entity["position"]["y"] - 400,
+            }
+            remote["distance"] = 580
+            obs["entities"].append(remote)
+        decision = CircuitAutomationSkill().next_action(obs)
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["position"], {"x": 2.0, "y": 2.0})
+
+    def test_circuit_automation_ignores_remote_planned_site_before_rail(self):
+        obs = powered_automation_observation()
+        obs["base"] = {"spawn_position": {"x": 0, "y": 0}, "anchor_position": {"x": 0, "y": 0}}
+        obs["inventory"] = {"assembling-machine-1": 2, "inserter": 1}
+        obs["automation_sites"] = [
+            {
+                "powered": True,
+                "pole_unit_number": 604,
+                "pole_position": {"x": 424, "y": -400},
+                "cable_assembler_position": {"x": 422, "y": -398},
+                "circuit_assembler_position": {"x": 426, "y": -398},
+                "transfer_inserter_position": {"x": 424, "y": -398},
+                "transfer_inserter_direction": 4,
+                "distance": 4,
+            }
+        ]
+        decision = CircuitAutomationSkill().next_action(obs)
+        self.assertIsNone(decision.action)
+        self.assertIn("cannot find a powered or wireable site", decision.reason)
+
     def test_build_item_mall_builds_missing_pole_before_assembler(self):
         obs = powered_automation_observation()
         obs["inventory"] = {
@@ -1781,6 +1871,25 @@ class PlannerTests(unittest.TestCase):
         decision = BuildItemMallSkill("transport-belt", 20).next_action(obs)
         self.assertEqual(decision.action["type"], "move_to")
         self.assertEqual(decision.action["position"], {"x": 88.5, "y": -3.5})
+
+    def test_build_item_mall_ignores_remote_unassigned_assembler_before_rail(self):
+        obs = powered_automation_observation()
+        obs["base"] = {"spawn_position": {"x": 0, "y": 0}, "anchor_position": {"x": 0, "y": 0}}
+        obs["inventory"] = {"assembling-machine-1": 1}
+        obs["entities"].append(
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 902,
+                "position": {"x": 420.5, "y": -400.5},
+                "distance": 580,
+                "recipe": None,
+                "electric_network_connected": True,
+                "inventories": {},
+            }
+        )
+        decision = BuildItemMallSkill("transport-belt", 20).next_action(obs)
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["position"], {"x": 2.0, "y": 2.0})
 
     def test_build_item_mall_inserts_recipe_ingredients(self):
         obs = powered_automation_observation()

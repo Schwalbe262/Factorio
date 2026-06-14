@@ -14,7 +14,13 @@ from factorio_ai.remote_slurm import (
     parse_strategy_worker_specs,
     request_strategy,
 )
-from factorio_ai.slurm_worker import compact_strategy_payload, parse_json_object_from_content, run_strategy_model_benchmark
+from factorio_ai.slurm_worker import (
+    compact_strategy_payload,
+    parse_json_object_from_content,
+    run_strategy_model_benchmark,
+    run_strategy_request,
+    try_llm_strategy_with_diagnostics,
+)
 from factorio_ai.strategy import make_strategy_payload, skill_catalog_payload
 
 
@@ -187,6 +193,92 @@ class RemoteSlurmTests(unittest.TestCase):
         self.assertTrue(all(row["source"] == "heuristic" for row in result["models"]))
         self.assertTrue(all(row["llm_error"] for row in result["models"]))
         self.assertTrue(all(row["llm_prompt_chars"] for row in result["models"]))
+
+    def test_strategy_llm_retries_with_ultra_compact_payload_on_context_limit(self):
+        calls = []
+
+        def fake_call(system, prompt, schema=None):
+            calls.append(prompt)
+            if len(calls) == 1:
+                return None, {"llm_error": "This model's maximum context length is 4096 tokens"}
+            return {"selected_skill": "expand_copper_smelting", "priority": 88, "reason": "copper deficit"}, {
+                "llm_response_snippet": "{}"
+            }
+
+        payload = {
+            "objective": "launch_rocket_program",
+            "observation": {"inventory": {}, "entities": [], "enemies": []},
+            "production_targets": {"copper-plate": 70.0},
+            "strategy_payload": {
+                "objective": "launch_rocket_program",
+                "observation": {"inventory": {}, "entities": [], "enemies": []},
+                "production_targets": {"copper-plate": 70.0},
+                "factory_monitor": {
+                    "target_status": {
+                        "items": [
+                            {
+                                "item": "copper-plate",
+                                "target_per_minute": 70.0,
+                                "estimated_per_minute": 0.0,
+                                "deficit_per_minute": 70.0,
+                            }
+                        ]
+                    },
+                    "bottlenecks": [{"item": "copper-plate", "severity": 95, "reason": "target deficit"}],
+                },
+                "available_skills": skill_catalog_payload(),
+            },
+            "available_skills": skill_catalog_payload(),
+        }
+
+        with patch("factorio_ai.slurm_worker.call_llm_json_with_diagnostics", side_effect=fake_call):
+            result, diagnostics = try_llm_strategy_with_diagnostics(payload)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["selected_skill"], "expand_copper_smelting")
+        self.assertEqual(diagnostics["llm_retry"], "ultra_compact_strategy_payload")
+        self.assertIn("maximum context", diagnostics["llm_initial_error"])
+        self.assertEqual(len(calls), 2)
+        self.assertLess(len(calls[1]), len(calls[0]))
+
+    def test_strategy_request_attaches_heuristic_support_for_sparse_llm_reasoning(self):
+        observation = {
+            "inventory": {"copper-plate": 1},
+            "entities": [
+                {"name": "stone-furnace", "inventories": {"1": {"coal": 1}, "2": {"copper-ore": 1}}},
+            ],
+            "resources": [],
+            "research": {"technologies": {}},
+        }
+        with (
+            patch(
+                "factorio_ai.slurm_worker.try_llm_strategy_with_diagnostics",
+                return_value=({"selected_skill": "expand_copper_smelting", "priority": 50, "reason": "", "evidence": []}, {}),
+            ),
+            patch(
+                "factorio_ai.slurm_worker.heuristic_strategy",
+                return_value={
+                    "selected_skill": "expand_copper_smelting",
+                    "priority": 95,
+                    "reason": "Current factory monitor reports bottleneck for copper-plate",
+                    "evidence": ["copper-plate_per_minute=0.0"],
+                    "blockers": ["copper-plate"],
+                },
+            ),
+        ):
+            result = run_strategy_request(
+                {
+                    "objective": "launch_rocket_program",
+                    "observation": observation,
+                    "production_targets": {"copper-plate": 70.0},
+                }
+            )
+
+        self.assertEqual(result["source"], "llm")
+        self.assertEqual(result["selected_skill"], "expand_copper_smelting")
+        self.assertEqual(result["reason_source"], "heuristic_support")
+        self.assertIn("copper-plate", result["reason"])
+        self.assertTrue(result["quality_warning"])
 
     def test_request_strategy_sends_locally_computed_strategy_payload(self):
         cfg = RemoteSlurmConfig(

@@ -214,6 +214,41 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(result["guardrail_adjusted"]["from"], "produce_electronic_circuit")
         self.assertIn("assembler-based electronic circuit production", result["blockers"])
 
+    def test_reconcile_promotes_hand_circuit_even_when_isolated_cell_exists(self):
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "produce_electronic_circuit",
+                "priority": 50,
+                "reason": "Need more circuits.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            {
+                "inventory": {"iron-plate": 20, "copper-plate": 20},
+                "entities": [
+                    {
+                        "name": "assembling-machine-1",
+                        "recipe": "copper-cable",
+                        "position": {"x": 400, "y": -400},
+                        "electric_network_connected": True,
+                    },
+                    {
+                        "name": "assembling-machine-1",
+                        "recipe": "electronic-circuit",
+                        "position": {"x": 404, "y": -400},
+                        "electric_network_connected": True,
+                    },
+                ],
+                "research": {"technologies": {"automation": {"researched": True}}},
+            },
+            production_targets={"electronic-circuit": 1000.0},
+        )
+        self.assertEqual(result["selected_skill"], "automate_electronic_circuit_line")
+        self.assertIn("hand_crafting_not_rate_solution=true", result["evidence"])
+
     def test_reconcile_promotes_fuel_dependent_expansion_to_coal_supply(self):
         result = reconcile_strategy_decision(
             {
