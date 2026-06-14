@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from collections import Counter
+from math import ceil
 from typing import Any
 
+from .blueprints import encode_blueprint_entities
 from .knowledge import RECIPES
 from .monitor import estimate_factory_sites, estimate_logistics_links
 from .models import (
@@ -519,6 +521,11 @@ def _green_circuit_layout_candidate(recipe_counts: Counter[str]) -> dict[str, An
         "source": "rate-calculator-style static recipe throughput",
         "target_pattern": "3 copper-cable assemblers feeding 2 electronic-circuit assemblers",
         "requires_build_command": True,
+        "blueprint": _blueprint_export(
+            "green-circuit-3-cable-2-circuit-cell",
+            _green_circuit_blueprint_entities(groups),
+            "Simulation-only 3:2 green circuit cell. Validate exact input belts, power, and collision before applying.",
+        ),
         "simulation": {
             "before": {
                 "copper_cable_assemblers": current_cable,
@@ -565,6 +572,26 @@ def _green_circuit_rate_per_minute(cable_assemblers: int, circuit_assemblers: in
     return min(circuit_capacity, cable_limited_circuits)
 
 
+def _green_circuit_blueprint_entities(groups: int) -> list[dict[str, Any]]:
+    entities: list[dict[str, Any]] = []
+    group_count = max(1, min(4, groups))
+    for group in range(group_count):
+        y = group * 10
+        for offset in (0, 3, 6):
+            _add_entity(entities, "assembling-machine-1", 0, y + offset, recipe="copper-cable")
+            _add_entity(entities, "inserter", -2, y + offset, direction=EAST)
+            _add_entity(entities, "inserter", 2, y + offset, direction=EAST)
+        for offset in (1, 5):
+            _add_entity(entities, "assembling-machine-1", 5, y + offset, recipe="electronic-circuit")
+            _add_entity(entities, "inserter", 3, y + offset, direction=EAST)
+            _add_entity(entities, "inserter", 7, y + offset, direction=EAST)
+        for offset in range(-1, 8):
+            _add_entity(entities, "transport-belt", -3, y + offset, direction=SOUTH)
+            _add_entity(entities, "transport-belt", 8, y + offset, direction=SOUTH)
+        _add_entity(entities, "small-electric-pole", 2, y + 3)
+    return entities
+
+
 def _smelting_standardization_candidate(item: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
     positions = [row.get("position") for row in rows if isinstance(row.get("position"), dict)]
     footprint = _layout_footprint(positions)
@@ -583,6 +610,11 @@ def _smelting_standardization_candidate(item: str, rows: list[dict[str, Any]]) -
         "source": "blueprint-pattern heuristic plus static furnace throughput",
         "target_pattern": "parallel smelting columns with shared ore/fuel/input and plate output lanes",
         "requires_build_command": True,
+        "blueprint": _blueprint_export(
+            f"{item}-parallel-smelting-columns",
+            _smelting_column_blueprint_entities(item, furnace_count, target_columns),
+            "Simulation-only smelting column block. Place near validated ore/fuel inputs; miners and long logistics are not included.",
+        ),
         "simulation": {
             "before": {
                 "sites": len(rows),
@@ -604,6 +636,25 @@ def _smelting_standardization_candidate(item: str, rows: list[dict[str, Any]]) -
             "score": round(min(score, 92.0), 1),
         },
     }
+
+
+def _smelting_column_blueprint_entities(item: str, furnace_count: int, columns: int) -> list[dict[str, Any]]:
+    entities: list[dict[str, Any]] = []
+    columns = max(1, columns)
+    rows_per_column = max(1, ceil(max(1, furnace_count) / columns))
+    for index in range(max(1, furnace_count)):
+        column = index // rows_per_column
+        row = index % rows_per_column
+        x = column * 8
+        y = row * 3
+        _add_entity(entities, "transport-belt", x + 1, y - 1, direction=SOUTH)
+        _add_entity(entities, "transport-belt", x + 1, y, direction=SOUTH)
+        _add_entity(entities, "transport-belt", x + 1, y + 1, direction=SOUTH)
+        _add_entity(entities, "inserter", x + 2, y, direction=EAST)
+        _add_entity(entities, "stone-furnace", x + 4, y)
+        _add_entity(entities, "inserter", x + 6, y, direction=EAST)
+        _add_entity(entities, "transport-belt", x + 7, y, direction=SOUTH)
+    return entities
 
 
 def _flow_shortening_candidate(link: dict[str, Any], length: float) -> dict[str, Any]:
@@ -769,6 +820,38 @@ def _machine_count(site: dict[str, Any], machine: str) -> int:
         except ValueError:
             total += 1
     return total
+
+
+def _blueprint_export(label: str, entities: list[dict[str, Any]], description: str) -> dict[str, Any] | None:
+    if not entities:
+        return None
+    exchange_string = encode_blueprint_entities(label, entities, description=description)
+    return {
+        "label": label,
+        "format": "factorio-blueprint-string",
+        "entity_count": len(entities),
+        "exchange_string": exchange_string,
+    }
+
+
+def _add_entity(
+    entities: list[dict[str, Any]],
+    name: str,
+    x: float,
+    y: float,
+    *,
+    direction: int | None = None,
+    recipe: str | None = None,
+    items: dict[str, Any] | None = None,
+) -> None:
+    entity: dict[str, Any] = {"name": name, "position": {"x": x, "y": y}}
+    if direction is not None:
+        entity["direction"] = direction
+    if recipe:
+        entity["recipe"] = recipe
+    if items:
+        entity["items"] = items
+    entities.append(entity)
 
 
 class IronPlateSkill:

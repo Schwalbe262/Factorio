@@ -7,6 +7,7 @@ from unittest.mock import patch
 from factorio_ai.networking import dashboard_urls
 from factorio_ai.web_dashboard import (
     FACTORIO_ROUTE,
+    _candidate_blueprint_response,
     _token_usage_svg,
     build_dashboard_state_cached,
     clear_dashboard_state_cache,
@@ -148,6 +149,12 @@ class WebDashboardTests(unittest.TestCase):
                             "candidate_id": "green-circuit-3-cable-2-circuit-cell",
                             "target_pattern": "3 copper-cable assemblers feeding 2 electronic-circuit assemblers",
                             "not_applied": True,
+                            "blueprint": {
+                                "label": "green-circuit-3-cable-2-circuit-cell",
+                                "format": "factorio-blueprint-string",
+                                "entity_count": 2,
+                                "exchange_string": "0SECRETBLUEPRINTSTRING",
+                            },
                             "simulation": {
                                 "score": 88,
                                 "before": {"electronic_circuit_per_minute": 10},
@@ -248,11 +255,38 @@ class WebDashboardTests(unittest.TestCase):
         self.assertIn("copper-ore", html)
         self.assertIn("agent-map", html)
         self.assertIn("green-circuit-3-cable-2-circuit-cell", html)
+        self.assertIn("copy-blueprint", html)
+        self.assertNotIn("0SECRETBLUEPRINTSTRING", html)
         self.assertIn("rebalance_green_circuit_ratio", html)
         self.assertIn("3 copper-cable assemblers", html)
         self.assertIn("codex_wait:bootstrap_build_item_mall", html)
         self.assertIn("compact-green-circuit-cell", html)
         self.assertIn("Reduce footprint", html)
+
+    def test_candidate_blueprint_response_returns_copy_payload(self):
+        response = _candidate_blueprint_response(
+            {
+                "layout_improvement": {
+                    "simulation_candidates": [
+                        {
+                            "candidate_id": "green-circuit-3-cable-2-circuit-cell",
+                            "blueprint": {
+                                "label": "green-circuit-3-cable-2-circuit-cell",
+                                "format": "factorio-blueprint-string",
+                                "entity_count": 2,
+                                "exchange_string": "0SECRETBLUEPRINTSTRING",
+                            },
+                        }
+                    ]
+                }
+            },
+            "green-circuit-3-cable-2-circuit-cell",
+        )
+
+        self.assertTrue(response["ok"])
+        self.assertEqual(response["format"], "factorio-blueprint-string")
+        self.assertEqual(response["entity_count"], 2)
+        self.assertEqual(response["blueprint"], "0SECRETBLUEPRINTSTRING")
 
     def test_token_usage_chart_uses_timestamp_spacing(self):
         svg = _token_usage_svg(

@@ -2,7 +2,9 @@ import unittest
 
 from factorio_ai.blueprints import (
     BlueprintDecodeError,
+    blueprint_payload_from_entities,
     decode_blueprint_string,
+    encode_blueprint_entities,
     encode_blueprint_payload,
     infer_blueprint_lessons,
     summarize_blueprint_payload,
@@ -32,6 +34,33 @@ class BlueprintTests(unittest.TestCase):
     def test_rejects_invalid_blueprint_string(self):
         with self.assertRaises(BlueprintDecodeError):
             decode_blueprint_string("not-a-blueprint")
+
+    def test_encodes_entities_as_importable_blueprint_payload(self):
+        text = encode_blueprint_entities(
+            "green circuit cell",
+            [
+                {"name": "assembling-machine-1", "position": {"x": 0, "y": 0}, "recipe": "copper-cable"},
+                {"name": "inserter", "position": {"x": 2, "y": 0}, "direction": 4},
+            ],
+            description="simulation-only candidate",
+        )
+        decoded = decode_blueprint_string(text)
+        blueprint = decoded["blueprint"]
+        self.assertEqual(blueprint["item"], "blueprint")
+        self.assertEqual(blueprint["label"], "green circuit cell")
+        self.assertEqual(blueprint["entities"][0]["recipe"], "copper-cable")
+        self.assertEqual(blueprint["entities"][1]["direction"], 4)
+
+    def test_entity_payload_assigns_stable_entity_numbers(self):
+        payload = blueprint_payload_from_entities(
+            "belts",
+            [
+                {"name": "transport-belt", "position": {"x": 0, "y": 0}},
+                {"name": "transport-belt", "position": {"x": 1, "y": 0}},
+            ],
+        )
+        entities = payload["blueprint"]["entities"]
+        self.assertEqual([entity["entity_number"] for entity in entities], [1, 2])
 
     def test_infers_smelting_lesson_and_training_example(self):
         payload = {

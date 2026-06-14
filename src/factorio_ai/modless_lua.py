@@ -120,6 +120,9 @@ def _compact_lua(lua: str) -> str:
 
 _COMMON_LUA = f"""
 local OBSERVE_RADIUS = {OBSERVE_RADIUS}
+local STARTER_RESOURCE_RADIUS = 224
+local STARTER_RESOURCE_TILE_LIMIT = 1200
+local REMOTE_RESOURCE_TILE_LIMIT = 220
 local POWER_SITE_RADIUS = 512
 local POWER_SITE_WATER_TILE_LIMIT = 360
 local LAB_SITE_RADIUS = 96
@@ -448,13 +451,14 @@ end
 local function collect_resources(anchor_position)
   local resources = {}
   local seen = {}
-  local source_positions = { origin }
-  if anchor_position and distance(origin, anchor_position) > 1 then
-    table.insert(source_positions, anchor_position)
+  local source_specs = {}
+  if anchor_position then
+    table.insert(source_specs, { position = anchor_position, radius = STARTER_RESOURCE_RADIUS, limit = STARTER_RESOURCE_TILE_LIMIT, source = "base" })
   end
+  table.insert(source_specs, { position = origin, radius = OBSERVE_RADIUS, limit = REMOTE_RESOURCE_TILE_LIMIT, source = "agent" })
   for _, resource_name in pairs({ "iron-ore", "coal", "stone", "copper-ore", "uranium-ore", "crude-oil" }) do
-    for _, source_position in pairs(source_positions) do
-      local found = surface.find_entities_filtered({ position = source_position, radius = OBSERVE_RADIUS, type = "resource", name = resource_name, limit = 160 })
+    for _, source_spec in pairs(source_specs) do
+      local found = surface.find_entities_filtered({ position = source_spec.position, radius = source_spec.radius, type = "resource", name = resource_name, limit = source_spec.limit })
       for _, entity in pairs(found) do
         if not entity.amount or entity.amount > 0 then
           local key = tostring(entity.unit_number or "") .. ":" .. entity.name .. ":" .. tostring(entity.position.x) .. "," .. tostring(entity.position.y)
@@ -467,7 +471,8 @@ local function collect_resources(anchor_position)
               position = position_table(entity.position),
               distance = round(distance(origin, entity.position)),
               distance_from_agent = round(distance(origin, entity.position)),
-              distance_from_base = anchor_position and round(distance(anchor_position, entity.position)) or nil
+              distance_from_base = anchor_position and round(distance(anchor_position, entity.position)) or nil,
+              observed_from = source_spec.source
             })
           end
         end

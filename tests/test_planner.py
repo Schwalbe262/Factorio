@@ -1,5 +1,6 @@
 import unittest
 
+from factorio_ai.blueprints import decode_blueprint_string
 from factorio_ai.planner import (
     AutomationScienceSkill,
     BeltSmeltingLineSkill,
@@ -330,6 +331,22 @@ class PlannerTests(unittest.TestCase):
         self.assertTrue(candidate["simulation_only"])
         self.assertTrue(candidate["not_applied"])
         self.assertGreater(candidate["simulation"]["after"]["electronic_circuit_per_minute"], candidate["simulation"]["before"]["electronic_circuit_per_minute"])
+        blueprint = candidate["blueprint"]
+        self.assertEqual(blueprint["format"], "factorio-blueprint-string")
+        decoded = decode_blueprint_string(blueprint["exchange_string"])
+        entities = decoded["blueprint"]["entities"]
+        self.assertTrue(
+            any(
+                entity["name"] == "assembling-machine-1" and entity.get("recipe") == "copper-cable"
+                for entity in entities
+            )
+        )
+        self.assertTrue(
+            any(
+                entity["name"] == "assembling-machine-1" and entity.get("recipe") == "electronic-circuit"
+                for entity in entities
+            )
+        )
 
     def test_factory_layout_simulates_belt_capacity_bottleneck(self):
         obs = base_observation()

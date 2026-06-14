@@ -28,6 +28,7 @@ LEGACY_FACTORIO_ROUTE = "/팩토리오"
 FACTORIO_ROUTES = {FACTORIO_ROUTE, LEGACY_FACTORIO_ROUTE}
 ICON_ROUTE_PREFIX = "/factorio/icon/"
 API_ROUTE = "/api/factorio"
+BLUEPRINT_API_ROUTE = "/api/factorio/blueprint"
 DEFAULT_LANG = "en"
 SUPPORTED_LANGS = {"en", "ko"}
 DEFAULT_PUBLIC_DASHBOARD_BASE_URL = "http://27.115.156.173:8787"
@@ -260,6 +261,10 @@ TEXT["en"].update(
         "after": "After",
         "delta": "Delta",
         "not_applied": "Not Applied",
+        "blueprint": "Blueprint",
+        "copy_blueprint": "Copy blueprint",
+        "copied": "Copied",
+        "copy_failed": "Copy failed",
     }
 )
 TEXT["ko"].update(
@@ -280,6 +285,10 @@ TEXT["ko"].update(
         "after": "\uac1c\uc120 \ud6c4",
         "delta": "\ubcc0\ud654",
         "not_applied": "\ubbf8\uc801\uc6a9",
+        "blueprint": "\ube14\ub8e8\ud504\ub9b0\ud2b8",
+        "copy_blueprint": "\ube14\ub8e8\ud504\ub9b0\ud2b8 \ubcf5\uc0ac",
+        "copied": "\ubcf5\uc0ac\ub428",
+        "copy_failed": "\ubcf5\uc0ac \uc2e4\ud328",
     }
 )
 
@@ -349,6 +358,17 @@ def make_dashboard_handler(cfg: AppConfig, default_objective: str) -> type[BaseH
                 self._send(
                     200,
                     json.dumps(state, ensure_ascii=False, indent=2).encode("utf-8"),
+                    "application/json; charset=utf-8",
+                )
+                return
+
+            if path == BLUEPRINT_API_ROUTE:
+                state = build_dashboard_state_cached(cfg, objective)
+                response = _candidate_blueprint_response(state, query.get("candidate_id", [""])[0])
+                status = 200 if response.get("ok") else 404
+                self._send(
+                    status,
+                    json.dumps(response, ensure_ascii=False, indent=2).encode("utf-8"),
                     "application/json; charset=utf-8",
                 )
                 return
@@ -428,6 +448,29 @@ def public_dashboard_urls(host: str, port: int, lang: str = DEFAULT_LANG) -> lis
         or DEFAULT_PUBLIC_DASHBOARD_BASE_URL
     )
     return dashboard_urls(host, port, route, base_url=base_url)
+
+
+def _candidate_blueprint_response(state: dict[str, Any], candidate_id: str) -> dict[str, Any]:
+    layout = state.get("layout_improvement") if isinstance(state.get("layout_improvement"), dict) else {}
+    candidates = layout.get("simulation_candidates") if isinstance(layout.get("simulation_candidates"), list) else []
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        if str(candidate.get("candidate_id") or "") != candidate_id:
+            continue
+        blueprint = candidate.get("blueprint") if isinstance(candidate.get("blueprint"), dict) else {}
+        exchange_string = blueprint.get("exchange_string")
+        if not isinstance(exchange_string, str) or not exchange_string:
+            break
+        return {
+            "ok": True,
+            "candidate_id": candidate_id,
+            "label": str(blueprint.get("label") or candidate_id),
+            "format": str(blueprint.get("format") or "factorio-blueprint-string"),
+            "entity_count": int(blueprint.get("entity_count") or 0),
+            "blueprint": exchange_string,
+        }
+    return {"ok": False, "error": "blueprint candidate not found", "candidate_id": candidate_id}
 
 
 def clear_dashboard_state_cache() -> None:
@@ -919,6 +962,11 @@ def _page(title: str, body: str, lang: str, objective: Any = None) -> str:
       font: inherit;
       cursor: pointer;
     }}
+    .copy-blueprint {{
+      white-space: nowrap;
+      padding: 6px 9px;
+      font-size: 12px;
+    }}
     .actions {{
       margin-top: 12px;
       display: flex;
@@ -1026,6 +1074,7 @@ def _page(title: str, body: str, lang: str, objective: Any = None) -> str:
     </div>
     {body}
   </main>
+  {_copy_blueprint_script(lang)}
 </body>
 </html>"""
 
@@ -1039,6 +1088,60 @@ def _language_switch(lang: str, objective: str) -> str:
         f"<a class=\"{ko_class}\" href=\"{escape(dashboard_path('ko', objective))}\">KR</a>"
         "</nav>"
     )
+
+
+def _copy_blueprint_script(lang: str) -> str:
+    copied = json.dumps(_t(lang, "copied"))
+    failed = json.dumps(_t(lang, "copy_failed"))
+    return f"""<script>
+(() => {{
+  const copyText = async (text) => {{
+    if (navigator.clipboard && window.isSecureContext) {{
+      await navigator.clipboard.writeText(text);
+      return;
+    }}
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.setAttribute("readonly", "");
+    area.style.position = "fixed";
+    area.style.left = "-9999px";
+    document.body.appendChild(area);
+    area.select();
+    document.execCommand("copy");
+    document.body.removeChild(area);
+  }};
+  document.addEventListener("click", async (event) => {{
+    const button = event.target.closest(".copy-blueprint");
+    if (!button) {{
+      return;
+    }}
+    event.preventDefault();
+    const candidateId = button.getAttribute("data-candidate-id") || "";
+    const params = new URLSearchParams(window.location.search);
+    const apiParams = new URLSearchParams({{ candidate_id: candidateId }});
+    const objective = params.get("objective");
+    if (objective) {{
+      apiParams.set("objective", objective);
+    }}
+    const original = button.textContent;
+    try {{
+      const response = await fetch("{BLUEPRINT_API_ROUTE}?" + apiParams.toString(), {{ cache: "no-store" }});
+      const data = await response.json();
+      if (!response.ok || !data.ok || !data.blueprint) {{
+        throw new Error(data.error || "blueprint unavailable");
+      }}
+      await copyText(data.blueprint);
+      button.textContent = {copied};
+    }} catch (error) {{
+      button.textContent = {failed};
+    }} finally {{
+      window.setTimeout(() => {{
+        button.textContent = original;
+      }}, 1500);
+    }}
+  }});
+}})();
+</script>"""
 
 
 def _production_table(rows: list[Any], lang: str) -> str:
@@ -1181,12 +1284,29 @@ def _layout_candidate_table(rows: list[Any], lang: str) -> str:
             f"<td>{escape(_compact_json_text(simulation.get('after')))}</td>"
             f"<td>{escape(_compact_json_text(simulation.get('delta')))}</td>"
             f"<td>{escape(_t(lang, 'not_applied') if row.get('not_applied') else '')}</td>"
+            f"<td>{_blueprint_copy_cell(row, lang)}</td>"
             "</tr>"
         )
     return (
         f"<table><thead><tr><th>{_t(lang, 'candidate')}</th><th>{_t(lang, 'pattern')}</th>"
         f"<th>{_t(lang, 'score')}</th><th>{_t(lang, 'before')}</th><th>{_t(lang, 'after')}</th>"
-        f"<th>{_t(lang, 'delta')}</th><th>{_t(lang, 'status')}</th></tr></thead><tbody>{body}</tbody></table>"
+        f"<th>{_t(lang, 'delta')}</th><th>{_t(lang, 'status')}</th><th>{_t(lang, 'blueprint')}</th>"
+        f"</tr></thead><tbody>{body}</tbody></table>"
+    )
+
+
+def _blueprint_copy_cell(row: dict[str, Any], lang: str) -> str:
+    blueprint = row.get("blueprint") if isinstance(row.get("blueprint"), dict) else {}
+    if not isinstance(blueprint.get("exchange_string"), str) or not blueprint.get("exchange_string"):
+        return ""
+    candidate_id = str(row.get("candidate_id") or "")
+    if not candidate_id:
+        return ""
+    label = str(blueprint.get("label") or candidate_id)
+    return (
+        f"<button type=\"button\" class=\"copy-blueprint\" "
+        f"data-candidate-id=\"{escape(candidate_id, quote=True)}\" "
+        f"title=\"{escape(label, quote=True)}\">{escape(_t(lang, 'copy_blueprint'))}</button>"
     )
 
 

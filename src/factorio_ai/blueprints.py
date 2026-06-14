@@ -9,6 +9,9 @@ import zlib
 from typing import Any, Iterable
 
 
+FACTORIO_BLUEPRINT_VERSION = 562949953421312
+
+
 class BlueprintDecodeError(ValueError):
     pass
 
@@ -98,6 +101,41 @@ def decode_blueprint_string(text: str) -> dict[str, Any]:
 def encode_blueprint_payload(payload: dict[str, Any]) -> str:
     raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     return "0" + base64.b64encode(zlib.compress(raw)).decode("ascii")
+
+
+def blueprint_payload_from_entities(
+    label: str,
+    entities: list[dict[str, Any]],
+    *,
+    icons: list[dict[str, Any]] | None = None,
+    description: str | None = None,
+) -> dict[str, Any]:
+    blueprint: dict[str, Any] = {
+        "item": "blueprint",
+        "label": label,
+        "entities": _normalized_blueprint_entities(entities),
+        "version": FACTORIO_BLUEPRINT_VERSION,
+    }
+    if icons:
+        blueprint["icons"] = icons
+    else:
+        first_name = str(entities[0].get("name") or "transport-belt") if entities else "transport-belt"
+        blueprint["icons"] = [{"signal": {"type": "item", "name": first_name}, "index": 1}]
+    if description:
+        blueprint["description"] = description
+    return {"blueprint": blueprint}
+
+
+def encode_blueprint_entities(
+    label: str,
+    entities: list[dict[str, Any]],
+    *,
+    icons: list[dict[str, Any]] | None = None,
+    description: str | None = None,
+) -> str:
+    return encode_blueprint_payload(
+        blueprint_payload_from_entities(label, entities, icons=icons, description=description)
+    )
 
 
 def iter_blueprints(payload: dict[str, Any]) -> Iterable[dict[str, Any]]:
@@ -225,6 +263,32 @@ def _parse_json(text: str) -> dict[str, Any]:
     if not isinstance(parsed, dict):
         raise BlueprintDecodeError("blueprint payload must be a JSON object")
     return parsed
+
+
+def _normalized_blueprint_entities(entities: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for index, entity in enumerate(entities, start=1):
+        if not isinstance(entity, dict) or not isinstance(entity.get("name"), str):
+            continue
+        position = entity.get("position") if isinstance(entity.get("position"), dict) else None
+        if position is None:
+            continue
+        row: dict[str, Any] = {
+            "entity_number": index,
+            "name": entity["name"],
+            "position": {
+                "x": round(float(position.get("x") or 0.0), 3),
+                "y": round(float(position.get("y") or 0.0), 3),
+            },
+        }
+        if "direction" in entity:
+            row["direction"] = int(entity.get("direction") or 0)
+        if isinstance(entity.get("recipe"), str):
+            row["recipe"] = entity["recipe"]
+        if isinstance(entity.get("items"), dict):
+            row["items"] = entity["items"]
+        normalized.append(row)
+    return normalized
 
 
 def _count_any(counts: dict[str, int], names: list[str]) -> int:
