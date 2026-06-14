@@ -746,7 +746,7 @@ class FactorioController:
                 "target_item": "iron-plate",
                 "target": target,
                 "goal": skill_name,
-                "max_steps": max_steps or 200,
+                "max_steps": _max_steps(max_steps, 200),
                 "log_prefix": "strategy-iron",
             }
         if skill_name == "produce_copper_plate":
@@ -756,7 +756,7 @@ class FactorioController:
                 "target_item": "copper-plate",
                 "target": target,
                 "goal": skill_name,
-                "max_steps": max_steps or 250,
+                "max_steps": _max_steps(max_steps, 250),
                 "log_prefix": "strategy-copper",
             }
         if skill_name == "produce_automation_science_pack":
@@ -766,7 +766,7 @@ class FactorioController:
                 "target_item": "automation-science-pack",
                 "target": target,
                 "goal": skill_name,
-                "max_steps": max_steps or 500,
+                "max_steps": _max_steps(max_steps, 500),
                 "log_prefix": "strategy-science",
             }
         if skill_name == "produce_electronic_circuit":
@@ -776,7 +776,7 @@ class FactorioController:
                 "target_item": "electronic-circuit",
                 "target": target,
                 "goal": skill_name,
-                "max_steps": max_steps or 500,
+                "max_steps": _max_steps(max_steps, 500),
                 "log_prefix": "strategy-circuit",
             }
         if skill_name == "build_belt_smelting_line":
@@ -786,7 +786,7 @@ class FactorioController:
                 "target_item": "iron-plate",
                 "target": target,
                 "goal": skill_name,
-                "max_steps": max_steps or 700,
+                "max_steps": _max_steps(max_steps, 700),
                 "log_prefix": "strategy-belt-smelting",
             }
         if skill_name == "setup_coal_supply":
@@ -796,7 +796,7 @@ class FactorioController:
                 "target_item": "coal",
                 "target": target,
                 "goal": skill_name,
-                "max_steps": max_steps or 800,
+                "max_steps": _max_steps(max_steps, 800),
                 "log_prefix": "strategy-coal-supply",
             }
         if skill_name == "connect_coal_fuel_feed":
@@ -805,7 +805,7 @@ class FactorioController:
                 "target_item": "coal",
                 "target": target_count or 1,
                 "goal": skill_name,
-                "max_steps": max_steps or 600,
+                "max_steps": _max_steps(max_steps, 600),
                 "log_prefix": "strategy-coal-fuel-feed",
             }
         if skill_name == "expand_iron_smelting":
@@ -815,7 +815,7 @@ class FactorioController:
                 "target_item": "iron-plate",
                 "target": target,
                 "goal": skill_name,
-                "max_steps": max_steps or 2000,
+                "max_steps": _max_steps(max_steps, 2000),
                 "log_prefix": "strategy-expand-iron-smelting",
             }
         if skill_name == "expand_copper_smelting":
@@ -825,7 +825,7 @@ class FactorioController:
                 "target_item": "copper-plate",
                 "target": target,
                 "goal": skill_name,
-                "max_steps": max_steps or 1600,
+                "max_steps": _max_steps(max_steps, 1600),
                 "log_prefix": "strategy-expand-copper-smelting",
             }
         if skill_name == "setup_power":
@@ -834,7 +834,7 @@ class FactorioController:
                 "target_item": "steam",
                 "target": 1,
                 "goal": skill_name,
-                "max_steps": max_steps or 900,
+                "max_steps": _max_steps(max_steps, 900),
                 "log_prefix": "strategy-power",
             }
         if skill_name == "research_automation":
@@ -843,7 +843,7 @@ class FactorioController:
                 "target_item": "automation-science-pack",
                 "target": 10,
                 "goal": skill_name,
-                "max_steps": max_steps or 1500,
+                "max_steps": _max_steps(max_steps, 1500),
                 "log_prefix": "strategy-automation-research",
             }
         if skill_name == "automate_electronic_circuit_line":
@@ -853,7 +853,7 @@ class FactorioController:
                 "target_item": "electronic-circuit",
                 "target": target,
                 "goal": skill_name,
-                "max_steps": max_steps or 1800,
+                "max_steps": _max_steps(max_steps, 1800),
                 "log_prefix": "strategy-circuit-automation",
             }
         if skill_name == "research_logistics":
@@ -862,7 +862,7 @@ class FactorioController:
                 "target_item": "automation-science-pack",
                 "target": 20,
                 "goal": skill_name,
-                "max_steps": max_steps or 2200,
+                "max_steps": _max_steps(max_steps, 2200),
                 "log_prefix": "strategy-logistics-research",
             }
         if skill_name == "bootstrap_build_item_mall":
@@ -873,7 +873,7 @@ class FactorioController:
                 "target_item": target_item,
                 "target": target,
                 "goal": skill_name,
-                "max_steps": max_steps or 1200,
+                "max_steps": _max_steps(max_steps, 1200),
                 "log_prefix": "strategy-build-item-mall",
             }
         if skill_name == "build_starter_defense":
@@ -882,7 +882,7 @@ class FactorioController:
                 "target_item": "gun-turret",
                 "target": 1,
                 "goal": skill_name,
-                "max_steps": max_steps or 900,
+                "max_steps": _max_steps(max_steps, 900),
                 "log_prefix": "strategy-starter-defense",
             }
         if skill_name == "plan_factory_site":
@@ -891,7 +891,7 @@ class FactorioController:
                 "target_item": "layout-plan",
                 "target": 1,
                 "goal": skill_name,
-                "max_steps": max_steps or 1,
+                "max_steps": _max_steps(max_steps, 1),
                 "log_prefix": "strategy-layout-improvement",
             }
         return None
@@ -1357,16 +1357,24 @@ class FactorioController:
         return FactorioRconClient(self.cfg.rcon_host, self.cfg.rcon_port, self.cfg.rcon_password)
 
     def _agent_parameter(self) -> dict[str, Any]:
-        if self.cfg.agent_player_name:
-            return {"player_name": self.cfg.agent_player_name}
+        player_name = self._configured_agent_player_name()
+        if player_name:
+            return {"player_name": player_name}
         return {}
 
     def _agent_action(self, action: dict[str, Any]) -> dict[str, Any]:
-        if not self.cfg.agent_player_name or "player_name" in action:
+        player_name = self._configured_agent_player_name()
+        if not player_name or "player_name" in action:
             return action
         targeted = dict(action)
-        targeted["player_name"] = self.cfg.agent_player_name
+        targeted["player_name"] = player_name
         return targeted
+
+    def _configured_agent_player_name(self) -> str:
+        player_name = str(self.cfg.agent_player_name or "").strip()
+        if player_name.lower() in {"auto", "connected", "first-connected", "*"}:
+            return ""
+        return player_name
 
     def _wait_for_move(self, action: dict[str, Any]) -> tuple[bool, str]:
         target = action.get("position")
@@ -1504,15 +1512,57 @@ class ModlessFactorioController(FactorioController):
         super().__init__(cfg)
         self._modless = ModlessLuaController(cfg)
 
+    def run_strategy_step(
+        self,
+        objective: str = "launch_rocket_program",
+        require_llm: bool = False,
+        target_count: int | None = None,
+        max_steps: int | None = None,
+    ) -> StrategyStepSummary:
+        if _real_player_execution_required():
+            observation = self.observe()
+            problem = _real_player_execution_problem(observation)
+            if problem:
+                return StrategyStepSummary(
+                    ok=False,
+                    reason=problem,
+                    objective=objective,
+                    selected_skill="",
+                    strategy={
+                        "selected_skill": "",
+                        "source": "execution_guard",
+                        "reason": problem,
+                        "player": observation.get("player"),
+                        "execution": observation.get("execution"),
+                    },
+                )
+        return super().run_strategy_step(
+            objective=objective,
+            require_llm=require_llm,
+            target_count=target_count,
+            max_steps=max_steps,
+        )
+
     def observe(self) -> dict[str, Any]:
-        response = self._modless.observe()
+        response = self._modless.observe(player_name=self._configured_agent_player_name())
         if not response.get("ok"):
             raise RuntimeError(f"no-mod observe failed: {response}")
         return response
 
     def act(self, action: dict[str, Any]) -> dict[str, Any]:
         validate_action(action)
-        return self._modless.act(self._agent_action(action))
+        if _real_player_execution_required():
+            observation = self.observe()
+            problem = _real_player_execution_problem(observation)
+            if problem:
+                return {
+                    "ok": False,
+                    "reason": problem,
+                    "mode": "modless-rcon-lua",
+                    "player": observation.get("player"),
+                    "execution": observation.get("execution"),
+                }
+        return self._modless.act(self._agent_action(action), player_name=self._configured_agent_player_name())
 
     def wait(self, ticks: int) -> dict[str, Any]:
         response = self.act({"type": "wait", "ticks": ticks})
@@ -1525,6 +1575,27 @@ class ModlessFactorioController(FactorioController):
 
 def _timestamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+
+
+def _real_player_execution_required() -> bool:
+    return os.getenv("FACTORIO_AI_REQUIRE_REAL_PLAYER", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _real_player_execution_problem(observation: dict[str, Any]) -> str:
+    execution = observation.get("execution") if isinstance(observation.get("execution"), dict) else {}
+    player = observation.get("player") if isinstance(observation.get("player"), dict) else {}
+    mode = str(execution.get("mode") or "").strip().lower()
+    kind = str(player.get("kind") or execution.get("agent_kind") or "").strip().lower()
+    character_valid = bool(player.get("character_valid") or execution.get("character_valid"))
+    if mode == "virtual" or kind == "server" or execution.get("virtual"):
+        return (
+            "real player execution required, but the no-mod adapter selected the virtual server agent; "
+            "connect a GUI client as the configured AI player or disable FACTORIO_AI_REQUIRE_REAL_PLAYER for headless tests"
+        )
+    if not character_valid:
+        name = str(player.get("name") or execution.get("agent_name") or "unknown")
+        return f"real player execution required, but player {name} has no valid character"
+    return ""
 
 
 def _read_json_file(path: Path) -> dict[str, Any]:
@@ -1542,6 +1613,12 @@ def _int_or_none(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _max_steps(value: int | None, default: int) -> int:
+    if value is None:
+        return default
+    return max(0, int(value))
 
 
 def _pid_is_running(pid: int) -> bool:

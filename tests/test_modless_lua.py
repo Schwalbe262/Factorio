@@ -26,6 +26,7 @@ class ModlessLuaTests(unittest.TestCase):
         self.assertIn("distance_from_base", command)
         self.assertIn('observed_from = source_spec.source', command)
         self.assertIn("resources = collect_resources(base_anchor)", command)
+        self.assertIn('execution = { mode = agent.kind == "server" and "virtual" or "player"', command)
         self.assertNotIn("ai_observe", command)
         self.assertNotIn("factorio_ai_autoplayer", command)
 
@@ -55,6 +56,7 @@ class ModlessLuaTests(unittest.TestCase):
         command = build_modless_action_command({"type": "mine", "position": {"x": 1, "y": 2}})
         self.assertIn("remember_agent_marker", command)
         self.assertIn("agent_marker", command)
+        self.assertIn("result.execution", command)
         self.assertIn("[AI]", command)
 
     def test_action_handles_virtual_lab_trigger_research(self):

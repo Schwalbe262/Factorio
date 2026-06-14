@@ -147,6 +147,7 @@ run_factorio_no_mod_server.bat
 run_factorio_no_mod_watch_gui.bat
 run_factorio_no_mod_iron_mvp.bat
 run_factorio_no_mod_llm_autopilot.bat
+run_factorio_no_mod_real_player_llm_autopilot.bat
 ```
 
 `run_factorio_non_gui.bat` starts the development server in a separate window and repeatedly executes
@@ -161,6 +162,10 @@ Factorio/Space Age content matches.
 `run_factorio_no_mod_llm_autopilot.bat` starts the continuous no-custom-mod autopilot with
 Slurm LLM strategy required. It fails instead of silently falling back to heuristics when the
 active 4B worker is not ready.
+`run_factorio_no_mod_real_player_llm_autopilot.bat` opens a GUI client, sets
+`FACTORIO_AI_AGENT_PLAYER=auto`, and sets `FACTORIO_AI_REQUIRE_REAL_PLAYER=1`. In that mode the
+autopilot uses the first connected GUI player and stops if it would otherwise fall back to the
+virtual server agent.
 
 The older modded development server is still launched internally with `--start-server` plus GUI
 `--mp-connect`, but it is configured for one local review client by default. Use it for fast skill
@@ -171,6 +176,12 @@ iteration only, not for public multiplayer compatibility.
 This is now the preferred path when multiplayer compatibility matters more than Steam achievements.
 It runs with only official Factorio/Space Age mods enabled and uses trusted RCON `/silent-command`
 Lua for observation and allowlisted player/server actions.
+
+By default, no-mod headless tests may use a virtual server-side agent when the configured
+`FACTORIO_AI_AGENT_PLAYER` is not connected. For GUI/real-player validation, set
+`FACTORIO_AI_AGENT_PLAYER=auto` and `FACTORIO_AI_REQUIRE_REAL_PLAYER=1`, or run
+`run_factorio_no_mod_real_player_llm_autopilot.bat`. The dashboard shows the current execution mode
+as `player` or `virtual` in the AI Activity panel.
 
 Create the save and start the LAN/RCON server:
 

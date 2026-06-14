@@ -223,6 +223,8 @@ TEXT["en"].update(
         "agent_kind": "Agent",
         "agent_position": "Current Position",
         "agent_target": "Target Position",
+        "execution_mode": "Execution Mode",
+        "character_valid": "Character",
         "last_action": "Last Action",
         "last_detail": "Detail",
         "no_agent_activity": "No AI agent marker has been recorded yet.",
@@ -242,6 +244,8 @@ TEXT["ko"].update(
         "agent_kind": "Agent",
         "agent_position": "현재 위치",
         "agent_target": "목표 위치",
+        "execution_mode": "실행 모드",
+        "character_valid": "캐릭터",
         "last_action": "마지막 행동",
         "last_detail": "상세",
         "no_agent_activity": "아직 기록된 AI 위치 marker가 없습니다.",
@@ -578,6 +582,7 @@ def build_dashboard_state(cfg: AppConfig, objective: str) -> dict[str, Any]:
             "targets": targets.to_dict(),
             "observation_tick": observation.get("tick"),
             "player": observation.get("player"),
+            "execution": observation.get("execution"),
             "agent_marker": observation.get("agent_marker"),
             "adapter": adapter,
             "monitor": monitor,
@@ -694,6 +699,7 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
     token_usage = state.get("token_usage") if isinstance(state.get("token_usage"), dict) else {}
     llm_decisions = state.get("llm_decisions") if isinstance(state.get("llm_decisions"), dict) else {}
     agent_marker = state.get("agent_marker") if isinstance(state.get("agent_marker"), dict) else {}
+    execution = state.get("execution") if isinstance(state.get("execution"), dict) else {}
     layout_improvement = state.get("layout_improvement") if isinstance(state.get("layout_improvement"), dict) else {}
     layout_background = state.get("layout_background") if isinstance(state.get("layout_background"), dict) else {}
 
@@ -717,7 +723,7 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
       </div>
     </section>
 
-    {_agent_activity_panel(agent_marker, state.get("player"), lang)}
+    {_agent_activity_panel(agent_marker, state.get("player"), execution, lang)}
 
     <section class="panel">
       <h2>{_t(lang, "strategic_recommendation")}</h2>
@@ -1486,7 +1492,7 @@ def _damage_event_table(rows: list[Any], lang: str) -> str:
     )
 
 
-def _agent_activity_panel(marker: dict[str, Any], player: Any, lang: str) -> str:
+def _agent_activity_panel(marker: dict[str, Any], player: Any, execution: dict[str, Any], lang: str) -> str:
     if not marker:
         if isinstance(player, dict):
             marker = {
@@ -1510,6 +1516,8 @@ def _agent_activity_panel(marker: dict[str, Any], player: Any, lang: str) -> str
         (_t(lang, "agent_kind"), f"{marker.get('kind') or ''} {marker.get('name') or ''}".strip()),
         (_t(lang, "agent_position"), _position_text(position)),
         (_t(lang, "agent_target"), _position_text(target)),
+        (_t(lang, "execution_mode"), _execution_mode_text(execution, player)),
+        (_t(lang, "character_valid"), _character_valid_text(execution, player, lang)),
         (_t(lang, "last_action"), marker.get("last_action")),
         (_t(lang, "last_detail"), marker.get("detail")),
         (_t(lang, "tick"), marker.get("tick")),
@@ -1527,6 +1535,30 @@ def _agent_activity_panel(marker: dict[str, Any], player: Any, lang: str) -> str
         "</div>"
         "</section>"
     )
+
+
+def _execution_mode_text(execution: dict[str, Any], player: Any) -> str:
+    mode = str(execution.get("mode") or "").strip()
+    if mode:
+        return mode
+    if isinstance(player, dict):
+        kind = str(player.get("kind") or "").strip()
+        if kind == "server":
+            return "virtual"
+        if kind:
+            return "player"
+    return ""
+
+
+def _character_valid_text(execution: dict[str, Any], player: Any, lang: str) -> str:
+    value = execution.get("character_valid")
+    if value is None and isinstance(player, dict):
+        value = player.get("character_valid")
+    if value is None:
+        return ""
+    if bool(value):
+        return "valid" if lang == "en" else "유효"
+    return "missing" if lang == "en" else "없음"
 
 
 def _agent_activity_svg(position: Any, target: Any) -> str:

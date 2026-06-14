@@ -69,6 +69,7 @@ Useful BAT files:
 run_factorio_no_mod_server.bat
 run_factorio_no_mod_watch_gui.bat
 run_factorio_no_mod_llm_autopilot.bat
+run_factorio_no_mod_real_player_llm_autopilot.bat
 run_factorio_slurm_llm_4b_worker.bat
 run_factorio_slurm_llm_4b_attached_benchmark.bat
 run_factorio_slurm_llm_9b_worker.bat
@@ -78,6 +79,14 @@ run_factorio_slurm_llm_27b_gpu3_queue.bat
 
 For test and implementation loops, prefer headless/no-mod commands. For user
 review, use the GUI watch helper.
+
+Headless no-mod runs may use the virtual server-side agent when the configured
+AI player is not connected. That is acceptable for fast iteration, but not for
+GUI/real-play validation. For real-player validation set
+`FACTORIO_AI_AGENT_PLAYER=auto` and `FACTORIO_AI_REQUIRE_REAL_PLAYER=1`, or run
+`run_factorio_no_mod_real_player_llm_autopilot.bat`. In that mode the
+controller uses the first connected GUI player and stops instead of falling
+back to the virtual server agent.
 
 ## Slurm LLM Workers
 

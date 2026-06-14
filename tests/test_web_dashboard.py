@@ -40,6 +40,7 @@ class WebDashboardTests(unittest.TestCase):
                 "observation_tick": 1,
                 "adapter": "no-mod-rcon-lua",
                 "player": {"name": "server", "kind": "server", "position": {"x": 1, "y": 2}},
+                "execution": {"mode": "virtual", "virtual": True, "character_valid": False},
                 "agent_marker": {
                     "name": "server",
                     "kind": "server",
@@ -253,6 +254,7 @@ class WebDashboardTests(unittest.TestCase):
         self.assertIn("2026-06-13 09:02:00 KST", html)
         self.assertIn("AI 동작 위치", html)
         self.assertIn("copper-ore", html)
+        self.assertIn("virtual", html)
         self.assertIn("agent-map", html)
         self.assertIn("green-circuit-3-cable-2-circuit-cell", html)
         self.assertIn("copy-blueprint", html)

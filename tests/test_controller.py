@@ -326,6 +326,59 @@ class ControllerTests(unittest.TestCase):
         self.assertFalse(wait_state["active"])
         self.assertEqual(wait_state["clear_reason"], "new build item executor committed")
 
+    def test_no_mod_strategy_step_strict_real_player_rejects_virtual_agent(self):
+        class FakeController(ModlessFactorioController):
+            def observe(self):
+                return {
+                    "ok": True,
+                    "tick": 1,
+                    "player": {"name": "server", "kind": "server", "character_valid": False},
+                    "execution": {"mode": "virtual", "virtual": True, "character_valid": False},
+                    "inventory": {},
+                    "entities": [],
+                    "resources": [],
+                    "enemies": [],
+                    "research": {"technologies": {}},
+                }
+
+            def strategy_decision(self, *args, **kwargs):
+                raise AssertionError("strict execution guard should run before LLM strategy")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = FakeController(make_test_config(Path(temp_dir)))
+            with patch.dict("os.environ", {"FACTORIO_AI_REQUIRE_REAL_PLAYER": "1"}):
+                summary = controller.run_strategy_step("launch_rocket_program", require_llm=True)
+
+        self.assertFalse(summary.ok)
+        self.assertEqual(summary.strategy["source"], "execution_guard")
+        self.assertIn("virtual server agent", summary.reason)
+
+    def test_no_mod_action_strict_real_player_rejects_virtual_agent(self):
+        class FakeController(ModlessFactorioController):
+            def observe(self):
+                return {
+                    "ok": True,
+                    "tick": 1,
+                    "player": {"name": "server", "kind": "server", "character_valid": False},
+                    "execution": {"mode": "virtual", "virtual": True, "character_valid": False},
+                }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = FakeController(make_test_config(Path(temp_dir)))
+            with patch.dict("os.environ", {"FACTORIO_AI_REQUIRE_REAL_PLAYER": "1"}):
+                response = controller.act({"type": "wait", "ticks": 1})
+
+        self.assertFalse(response["ok"])
+        self.assertIn("virtual server agent", response["reason"])
+
+    def test_auto_agent_player_name_uses_first_connected_player(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cfg = replace(make_test_config(Path(temp_dir)), agent_player_name="auto")
+            controller = ModlessFactorioController(cfg)
+
+        self.assertEqual(controller._agent_parameter(), {})
+        self.assertNotIn("player_name", controller._agent_action({"type": "wait", "ticks": 1}))
+
     def test_autopilot_pulses_layout_work_while_codex_wait_state_is_active(self):
         observation = {
             "tick": 2,
@@ -529,6 +582,9 @@ class ControllerTests(unittest.TestCase):
             self.assertEqual(layout_config["goal"], "plan_factory_site")
             self.assertEqual(layout_config["target_item"], "layout-plan")
             self.assertEqual(layout_config["max_steps"], 2)
+            dry_run_config = controller._skill_run_config("expand_iron_smelting", max_steps=0)
+            self.assertIsNotNone(dry_run_config)
+            self.assertEqual(dry_run_config["max_steps"], 0)
 
     def test_strategy_step_summary_serializes_run(self):
         run = RunSummary(

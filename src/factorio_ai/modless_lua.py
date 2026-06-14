@@ -46,12 +46,14 @@ class ModlessLuaController:
         self.cfg = cfg
 
     def observe(self, *, player_name: str | None = None) -> dict[str, Any]:
-        command = build_modless_observe_command(player_name or self.cfg.agent_player_name)
+        effective_player = self.cfg.agent_player_name if player_name is None else player_name
+        command = build_modless_observe_command(effective_player)
         with self._client() as client:
             return execute_json_lua_command(client, command)
 
     def act(self, action: dict[str, Any], *, player_name: str | None = None) -> dict[str, Any]:
-        command = build_modless_action_command(action, player_name=player_name or self.cfg.agent_player_name)
+        effective_player = self.cfg.agent_player_name if player_name is None else player_name
+        command = build_modless_action_command(action, player_name=effective_player)
         with self._client() as client:
             return execute_json_lua_command(client, command)
 
@@ -835,6 +837,7 @@ json_reply({
   mode = "modless-rcon-lua",
   tick = game.tick,
   player = { name = agent.name, kind = agent.kind, position = position_table(origin), surface = surface.name, character_valid = agent.character_valid, move = agent.move or { active = false } },
+  execution = { mode = agent.kind == "server" and "virtual" or "player", agent_kind = agent.kind, agent_name = agent.name, character_valid = agent.character_valid, virtual = agent.kind == "server" },
   base = { anchor_position = position_table(base_anchor), spawn_position = position_table(base_anchor) },
   inventory = inventory_contents(agent.inventory),
   agent_marker = agent_marker_snapshot(agent),
@@ -908,6 +911,8 @@ local function action_marker_detail(result)
 end
 local function reply_action(result)
   result = result or err("action returned no result")
+  result.agent = { name = agent.name, kind = agent.kind, character_valid = agent.character_valid }
+  result.execution = { mode = agent.kind == "server" and "virtual" or "player", agent_kind = agent.kind, agent_name = agent.name, character_valid = agent.character_valid, virtual = agent.kind == "server" or result.virtual == true }
   result.agent_marker = remember_agent_marker(agent, action.type, action_marker_detail(result), action_marker_target(result))
   json_reply(result)
 end
