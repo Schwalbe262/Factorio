@@ -9,7 +9,9 @@ from factorio_ai.remote_slurm import (
     _llm_status_remediation,
     _status_needs_local_gpu,
     _worker_env_values,
+    compare_strategy_workers,
     config,
+    parse_strategy_worker_specs,
     request_strategy,
 )
 from factorio_ai.slurm_worker import compact_strategy_payload, parse_json_object_from_content, run_strategy_model_benchmark
@@ -232,6 +234,80 @@ class RemoteSlurmTests(unittest.TestCase):
         self.assertIn("strategy_payload", payload)
         self.assertEqual(payload["strategy_payload"]["factory_monitor"]["target_status"]["items"][0]["item"], "copper-plate")
         self.assertEqual(payload["strategy_payload"]["factory_monitor"]["target_status"]["items"][0]["estimated_per_minute"], 18.75)
+
+    def test_parse_strategy_worker_specs_defaults_and_custom_specs(self):
+        defaults = parse_strategy_worker_specs(None)
+        self.assertEqual([item.label for item in defaults], ["4b", "9b", "27b"])
+
+        specs = parse_strategy_worker_specs("small=~/factorio-ai-worker@factorio-ai-worker,big=~/big-worker@big-job")
+        self.assertEqual(specs[0].label, "small")
+        self.assertEqual(specs[0].remote_dir, "~/factorio-ai-worker")
+        self.assertEqual(specs[0].job_name, "factorio-ai-worker")
+        self.assertEqual(specs[1].label, "big")
+        self.assertEqual(specs[1].remote_dir, "~/big-worker")
+        self.assertEqual(specs[1].job_name, "big-job")
+
+    def test_compare_strategy_workers_records_ready_and_unready_workers(self):
+        cfg = RemoteSlurmConfig(
+            enabled=True,
+            ssh_path="ssh",
+            scp_path="scp",
+            host="example",
+            user="user",
+            port=22,
+            key_path="key",
+            remote_dir="~/factorio-ai-worker",
+            job_name="factorio-ai-worker",
+            conda_env="factorio-ai",
+            partition="gpu4",
+            cpus_per_task=8,
+            gpus_per_node=1,
+            gres="gpu:1",
+            time_limit="24:00:00",
+            setup_timeout_seconds=60,
+            task_timeout_seconds=30,
+        )
+        specs = parse_strategy_worker_specs("4b=~/factorio-ai-worker@factorio-ai-worker,27b=~/factorio-ai-worker-27b@factorio-ai-worker-27b")
+
+        def fake_status(worker_cfg):
+            if worker_cfg.job_name == "factorio-ai-worker":
+                return {
+                    "llm_ready": True,
+                    "remote": {
+                        "env_values": {"FACTORIO_AI_LLM_MODEL": "Qwen/Qwen3.5-4B"},
+                        "gpu": {"count": 1},
+                    },
+                }
+            return {
+                "llm_ready": False,
+                "missing": ["LLM endpoint"],
+                "remote": {
+                    "env_values": {"FACTORIO_AI_LLM_MODEL": "Qwen/Qwen3.6-27B-FP8"},
+                    "gpu": {"count": 3},
+                },
+            }
+
+        with (
+            patch("factorio_ai.remote_slurm.llm_status", side_effect=fake_status),
+            patch(
+                "factorio_ai.remote_slurm.request_strategy",
+                return_value={"source": "llm", "selected_skill": "automate_electronic_circuit_line", "priority": 95},
+            ) as request,
+        ):
+            result = compare_strategy_workers(
+                objective="launch_rocket_program",
+                observation={"inventory": {}, "entities": [], "enemies": []},
+                workers=specs,
+                cfg=cfg,
+                timeout_seconds=1,
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["workers"][0]["model"], "Qwen/Qwen3.5-4B")
+        self.assertEqual(result["workers"][0]["selected_skill"], "automate_electronic_circuit_line")
+        self.assertEqual(result["workers"][1]["model"], "Qwen/Qwen3.6-27B-FP8")
+        self.assertIn("LLM endpoint", result["workers"][1]["error"])
+        request.assert_called_once()
 
     def test_llm_content_parser_extracts_json_object_from_text(self):
         parsed = parse_json_object_from_content(

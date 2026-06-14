@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 from dataclasses import dataclass
+from dataclasses import replace
 from datetime import datetime, timezone
 import json
 import os
@@ -71,6 +72,20 @@ class RemoteSlurmConfig:
     time_limit: str
     setup_timeout_seconds: int
     task_timeout_seconds: int
+
+
+@dataclass(frozen=True)
+class StrategyWorkerSpec:
+    label: str
+    remote_dir: str
+    job_name: str
+
+
+DEFAULT_STRATEGY_WORKERS = (
+    StrategyWorkerSpec("4b", "~/factorio-ai-worker", "factorio-ai-worker"),
+    StrategyWorkerSpec("9b", "~/factorio-ai-worker-9b", "factorio-ai-worker-9b"),
+    StrategyWorkerSpec("27b", "~/factorio-ai-worker-27b", "factorio-ai-worker-27b"),
+)
 
 
 def config() -> RemoteSlurmConfig:
@@ -719,6 +734,98 @@ def request_strategy(
     raise TimeoutError(f"remote strategy task timed out: {task_name}")
 
 
+def parse_strategy_worker_specs(value: str | None) -> list[StrategyWorkerSpec]:
+    if not value or not value.strip():
+        return list(DEFAULT_STRATEGY_WORKERS)
+    specs: list[StrategyWorkerSpec] = []
+    for raw_item in value.split(","):
+        item = raw_item.strip()
+        if not item:
+            continue
+        if "=" in item:
+            label, remainder = item.split("=", 1)
+        else:
+            label, remainder = item, item
+        if "@" in remainder:
+            remote_dir, job_name = remainder.rsplit("@", 1)
+        else:
+            remote_dir = remainder
+            job_name = Path(remote_dir.rstrip("/")).name or DEFAULT_JOB_NAME
+        specs.append(
+            StrategyWorkerSpec(
+                label=label.strip() or job_name.strip() or remote_dir.strip(),
+                remote_dir=remote_dir.strip(),
+                job_name=job_name.strip() or DEFAULT_JOB_NAME,
+            )
+        )
+    return specs
+
+
+def compare_strategy_workers(
+    *,
+    objective: str,
+    observation: dict[str, Any],
+    production_targets: dict[str, float] | None = None,
+    available_skills: list[dict[str, Any]] | None = None,
+    workers: list[StrategyWorkerSpec] | None = None,
+    cfg: RemoteSlurmConfig | None = None,
+    timeout_seconds: int | None = None,
+) -> dict[str, Any]:
+    base_cfg = cfg or config()
+    rows: list[dict[str, Any]] = []
+    for spec in workers or list(DEFAULT_STRATEGY_WORKERS):
+        worker_cfg = replace(base_cfg, remote_dir=spec.remote_dir, job_name=spec.job_name)
+        started = time.monotonic()
+        row: dict[str, Any] = {
+            "label": spec.label,
+            "remote_dir": spec.remote_dir,
+            "job_name": spec.job_name,
+            "ok": False,
+        }
+        try:
+            status_payload = llm_status(worker_cfg)
+            remote = status_payload.get("remote") if isinstance(status_payload.get("remote"), dict) else {}
+            env_values = remote.get("env_values") if isinstance(remote.get("env_values"), dict) else {}
+            gpu = remote.get("gpu") if isinstance(remote.get("gpu"), dict) else {}
+            row["llm_ready"] = bool(status_payload.get("llm_ready"))
+            row["model"] = env_values.get("FACTORIO_AI_LLM_MODEL") or env_values.get("FACTORIO_AI_VLLM_MODEL") or ""
+            row["gpu_count"] = _safe_int(gpu.get("count"))
+            if not status_payload.get("llm_ready"):
+                row["error"] = "; ".join(str(item) for item in status_payload.get("missing") or ["LLM not ready"])
+            else:
+                decision = request_strategy(
+                    objective=objective,
+                    observation=observation,
+                    production_targets=production_targets,
+                    available_skills=available_skills,
+                    cfg=worker_cfg,
+                    timeout_seconds=timeout_seconds,
+                )
+                row.update(
+                    {
+                        "ok": True,
+                        "source": decision.get("source"),
+                        "selected_skill": decision.get("selected_skill") or decision.get("selected_goal"),
+                        "priority": decision.get("priority"),
+                        "reason": decision.get("reason"),
+                        "blockers": decision.get("blockers"),
+                        "evidence": decision.get("evidence"),
+                        "llm_error": decision.get("llm_error") or decision.get("error") or "",
+                    }
+                )
+        except Exception as exc:  # noqa: BLE001
+            row["error"] = f"{type(exc).__name__}: {exc}"
+        row["latency_ms"] = int((time.monotonic() - started) * 1000)
+        rows.append(row)
+    return {
+        "ok": any(row.get("ok") for row in rows),
+        "type": "strategy_worker_comparison",
+        "objective": objective,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "workers": rows,
+    }
+
+
 def request_layout_improvement(
     objective: str,
     active_skill: str,
@@ -905,6 +1012,13 @@ def _int_env(name: str, fallback: int, minimum: int = 0) -> int:
     except ValueError:
         return fallback
     return value if value >= minimum else fallback
+
+
+def _safe_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _llm_env_presence(env: Any) -> dict[str, bool]:

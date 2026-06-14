@@ -201,6 +201,31 @@ class WebDashboardTests(unittest.TestCase):
                     ],
                     "entry_count": 1,
                 },
+                "strategy_worker_comparison": {
+                    "latest": {
+                        "created_at": "2026-06-13T00:03:00+00:00",
+                        "workers": [
+                            {
+                                "label": "4b",
+                                "model": "Qwen/Qwen3.5-4B",
+                                "llm_ready": True,
+                                "source": "llm",
+                                "selected_skill": "expand_copper_smelting",
+                                "priority": 50,
+                                "reason": "",
+                                "latency_ms": 23,
+                            },
+                            {
+                                "label": "27b",
+                                "model": "Qwen/Qwen3.6-27B-FP8",
+                                "llm_ready": False,
+                                "error": "LLM endpoint",
+                                "latency_ms": 3,
+                            },
+                        ],
+                    },
+                    "entry_count": 1,
+                },
                 "token_usage": {
                     "samples": [
                         {
@@ -252,6 +277,10 @@ class WebDashboardTests(unittest.TestCase):
         self.assertIn("local_llm", html)
         self.assertIn("LLM unavailable", html)
         self.assertIn("2026-06-13 09:02:00 KST", html)
+        self.assertIn("LLM Worker Comparison", html)
+        self.assertIn("Qwen/Qwen3.5-4B", html)
+        self.assertIn("Qwen/Qwen3.6-27B-FP8", html)
+        self.assertIn("LLM endpoint", html)
         self.assertIn("AI 동작 위치", html)
         self.assertIn("copper-ore", html)
         self.assertIn("virtual", html)

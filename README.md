@@ -741,6 +741,21 @@ factorio-ai slurm-llm-status
 whether `nvidia-smi -L` sees a GPU, whether `/v1/models` responds from the LLM endpoint, and whether
 the Factorio AI code has been deployed under the remote worker directory.
 
+Compare the current Factorio strategy payload across the active 4B, 9B, and 27B workers:
+
+```powershell
+$env:PYTHONPATH="src"
+$env:FACTORIO_AI_AGENT_PLAYER="auto"
+$env:FACTORIO_AI_SLURM_ENABLED="1"
+$env:FACTORIO_AI_SLURM_MODE="queue"
+python -m factorio_ai.cli slurm-compare-strategy-workers --objective launch_rocket_program
+```
+
+The command appends `logs/strategy-worker-comparison.jsonl`, and the dashboard shows the latest
+worker comparison under the LLM decision log. This makes it visible when a worker is ready but falls
+back because of runtime context limits, or when the 27B worker has GPUs allocated but the endpoint is
+not serving yet.
+
 ## GitHub Workflow
 
 This repository is intended to be committed and pushed by part:

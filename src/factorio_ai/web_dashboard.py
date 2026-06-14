@@ -121,6 +121,11 @@ TEXT: dict[str, dict[str, str]] = {
         "no_power_networks": "No electric power networks inferred yet.",
         "llm_decisions": "LLM Decision Log",
         "no_llm_decisions": "No LLM strategy attempts recorded yet.",
+        "llm_worker_comparison": "LLM Worker Comparison",
+        "no_llm_worker_comparison": "No Slurm LLM worker comparison recorded yet.",
+        "worker": "Worker",
+        "model": "Model",
+        "ready": "Ready",
         "provider": "Provider",
         "source": "Source",
         "latency_ms": "Latency ms",
@@ -182,6 +187,11 @@ TEXT: dict[str, dict[str, str]] = {
         "no_power_networks": "아직 추정된 전력망이 없습니다.",
         "llm_decisions": "LLM 판단 로그",
         "no_llm_decisions": "아직 기록된 LLM 전략 시도가 없습니다.",
+        "llm_worker_comparison": "LLM Worker Comparison",
+        "no_llm_worker_comparison": "No Slurm LLM worker comparison recorded yet.",
+        "worker": "Worker",
+        "model": "Model",
+        "ready": "Ready",
         "provider": "제공자",
         "source": "소스",
         "latency_ms": "지연 ms",
@@ -566,6 +576,7 @@ def build_dashboard_state(cfg: AppConfig, objective: str) -> dict[str, Any]:
     targets = load_targets(cfg.runtime_dir, objective)
     token_usage = token_usage_summary(cfg.log_dir)
     llm_decisions = llm_decision_summary(cfg.log_dir)
+    worker_comparison = strategy_worker_comparison_summary(cfg.log_dir)
     layout_background = layout_background_summary(cfg.log_dir)
     try:
         observation, adapter = observe_dashboard_state(cfg)
@@ -591,6 +602,7 @@ def build_dashboard_state(cfg: AppConfig, objective: str) -> dict[str, Any]:
             "strategy": strategy,
             "token_usage": token_usage,
             "llm_decisions": llm_decisions,
+            "strategy_worker_comparison": worker_comparison,
         }
     except Exception as exc:  # noqa: BLE001
         return {
@@ -602,11 +614,36 @@ def build_dashboard_state(cfg: AppConfig, objective: str) -> dict[str, Any]:
             "layout_background": layout_background,
             "token_usage": token_usage,
             "llm_decisions": llm_decisions,
+            "strategy_worker_comparison": worker_comparison,
         }
 
 
 def layout_background_summary(log_dir: Any, *, limit: int = 20) -> dict[str, Any]:
     path = log_dir / "layout-improvement-background.jsonl"
+    rows: list[dict[str, Any]] = []
+    if path.exists():
+        with path.open(encoding="utf-8") as file:
+            for line in file:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    raw = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(raw, dict):
+                    rows.append(raw)
+    entries = rows[-limit:] if limit >= 0 else rows
+    return {
+        "entries": entries,
+        "entry_count": len(rows),
+        "latest": entries[-1] if entries else None,
+        "log_path": str(path),
+    }
+
+
+def strategy_worker_comparison_summary(log_dir: Any, *, limit: int = 10) -> dict[str, Any]:
+    path = log_dir / "strategy-worker-comparison.jsonl"
     rows: list[dict[str, Any]] = []
     if path.exists():
         with path.open(encoding="utf-8") as file:
@@ -667,6 +704,7 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
               <p class="error">{escape(str(state.get("error") or "unknown error"))}</p>
             </section>
             {_llm_decision_panel(state.get("llm_decisions"), lang)}
+            {_strategy_worker_comparison_panel(state.get("strategy_worker_comparison"), lang)}
             <section class="panel">
               <h2>{_t(lang, "layout_background")}</h2>
               {_layout_background_panel(state.get("layout_background"), lang)}
@@ -698,6 +736,9 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
     targets_per_minute = targets.get("per_minute") if isinstance(targets.get("per_minute"), dict) else {}
     token_usage = state.get("token_usage") if isinstance(state.get("token_usage"), dict) else {}
     llm_decisions = state.get("llm_decisions") if isinstance(state.get("llm_decisions"), dict) else {}
+    worker_comparison = (
+        state.get("strategy_worker_comparison") if isinstance(state.get("strategy_worker_comparison"), dict) else {}
+    )
     agent_marker = state.get("agent_marker") if isinstance(state.get("agent_marker"), dict) else {}
     execution = state.get("execution") if isinstance(state.get("execution"), dict) else {}
     layout_improvement = state.get("layout_improvement") if isinstance(state.get("layout_improvement"), dict) else {}
@@ -738,6 +779,8 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
     </section>
 
     {_llm_decision_panel(llm_decisions, lang)}
+
+    {_strategy_worker_comparison_panel(worker_comparison, lang)}
 
     <section class="panel">
       <h2>{_t(lang, "desired_targets")}</h2>
@@ -1657,6 +1700,44 @@ def _llm_decision_panel(value: Any, lang: str) -> str:
     )
 
 
+def _strategy_worker_comparison_panel(value: Any, lang: str) -> str:
+    summary = value if isinstance(value, dict) else {}
+    latest = summary.get("latest") if isinstance(summary.get("latest"), dict) else {}
+    workers = latest.get("workers") if isinstance(latest.get("workers"), list) else []
+    if not workers:
+        return (
+            "<section class=\"panel\">"
+            f"<h2>{_t(lang, 'llm_worker_comparison')}</h2>"
+            f"<p class=\"muted\">{_t(lang, 'no_llm_worker_comparison')}</p>"
+            "</section>"
+        )
+    rows = "".join(
+        "<tr>"
+        f"<td>{escape(str(row.get('label') or ''))}</td>"
+        f"<td>{escape(str(row.get('model') or ''))}</td>"
+        f"<td>{escape(_yes_no(row.get('llm_ready'), lang))}</td>"
+        f"<td>{escape(str(row.get('source') or ''))}</td>"
+        f"<td>{escape(str(row.get('selected_skill') or ''))}</td>"
+        f"<td>{escape(str(row.get('priority') or ''))}</td>"
+        f"<td>{escape(str(row.get('reason') or ''))}</td>"
+        f"<td>{escape(str(row.get('error') or row.get('llm_error') or ''))}</td>"
+        f"<td>{escape(str(row.get('latency_ms') or 0))}</td>"
+        "</tr>"
+        for row in workers
+        if isinstance(row, dict)
+    )
+    return (
+        "<section class=\"panel\">"
+        f"<h2>{_t(lang, 'llm_worker_comparison')}</h2>"
+        f"<p class=\"muted\">{escape(_format_kst_timestamp(latest.get('created_at')))}</p>"
+        f"<table><thead><tr><th>{_t(lang, 'worker')}</th><th>{_t(lang, 'model')}</th>"
+        f"<th>{_t(lang, 'ready')}</th><th>{_t(lang, 'source')}</th><th>{_t(lang, 'executor')}</th>"
+        f"<th>{_t(lang, 'priority')}</th><th>{_t(lang, 'reason')}</th><th>{_t(lang, 'error')}</th>"
+        f"<th>{_t(lang, 'latency_ms')}</th></tr></thead><tbody>{rows}</tbody></table>"
+        "</section>"
+    )
+
+
 def _metric(label: str, value: str) -> str:
     return (
         "<div class=\"metric\">"
@@ -1911,6 +1992,12 @@ def _format_int(value: Any) -> str:
         return f"{int(value or 0):,}"
     except (TypeError, ValueError):
         return "0"
+
+
+def _yes_no(value: Any, lang: str) -> str:
+    if lang == "ko":
+        return "yes" if bool(value) else "no"
+    return "yes" if bool(value) else "no"
 
 
 def _t(lang: str, key: str) -> str:

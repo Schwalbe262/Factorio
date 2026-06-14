@@ -150,6 +150,29 @@ $env:FACTORIO_AI_SLURM_JOB_NAME="factorio-ai-worker"
 python -m factorio_ai.cli slurm-llm-status
 ```
 
+Compare all configured strategy workers on the current game payload:
+
+```powershell
+$env:PYTHONPATH="src"
+$env:FACTORIO_AI_AGENT_PLAYER="auto"
+$env:FACTORIO_AI_SLURM_ENABLED="1"
+$env:FACTORIO_AI_SLURM_MODE="queue"
+python -m factorio_ai.cli slurm-compare-strategy-workers --objective launch_rocket_program
+```
+
+The latest live comparison showed:
+
+- 4B worker ready, model `Qwen/Qwen3.5-4B`, returned LLM source and selected
+  `expand_copper_smelting`.
+- 9B worker ready, model `Qwen/Qwen3.5-9B`, but the actual request hit a
+  runtime 4096-token context limit and fell back to heuristic
+  `expand_copper_smelting`.
+- 27B worker has three RTX 6000 Ada GPUs allocated for
+  `Qwen/Qwen3.6-27B-FP8`, but the OpenAI-compatible endpoint is not serving yet.
+
+The command writes `logs/strategy-worker-comparison.jsonl`; the web dashboard
+renders the latest comparison under the LLM decision log.
+
 Deploy changed source to the active worker:
 
 ```powershell

@@ -21,6 +21,8 @@ from .factorio import (
 )
 from .modless_lua import ModlessLuaController
 from . import remote_slurm
+from .targets import load_targets
+from .strategy import skill_catalog_payload
 from .vanilla_gui import (
     VanillaGuiDriver,
     launch_vanilla_gui,
@@ -411,6 +413,25 @@ def main(argv: list[str] | None = None) -> None:
         "--no-deploy",
         action="store_true",
         help="With --attached, skip deploying the current source before running the one-shot task",
+    )
+    worker_compare_parser = subparsers.add_parser(
+        "slurm-compare-strategy-workers",
+        help="Compare the same current strategy payload across configured Slurm LLM workers",
+    )
+    worker_compare_parser.add_argument("--objective", default="launch_rocket_program")
+    worker_compare_parser.add_argument(
+        "--workers",
+        default=os.getenv("FACTORIO_AI_STRATEGY_WORKERS"),
+        help=(
+            "Comma-separated label=remote_dir@job_name specs. "
+            "Defaults to 4b, 9b, and 27b Factorio workers."
+        ),
+    )
+    worker_compare_parser.add_argument("--timeout", type=int, default=90)
+    worker_compare_parser.add_argument(
+        "--no-log",
+        action="store_true",
+        help="Print the comparison without appending logs/strategy-worker-comparison.jsonl",
     )
 
     args = parser.parse_args(argv)
@@ -1194,6 +1215,26 @@ def main(argv: list[str] | None = None) -> None:
             if not args.no_deploy:
                 remote_slurm.deploy()
         result = remote_slurm.request_strategy_model_benchmark(payload, models=models, timeout_seconds=args.timeout)
+        print_json(result)
+        return
+
+    if args.command == "slurm-compare-strategy-workers":
+        observation = ModlessFactorioController(cfg).observe()
+        production_targets = load_targets(cfg.runtime_dir, args.objective).per_minute
+        workers = remote_slurm.parse_strategy_worker_specs(args.workers)
+        result = remote_slurm.compare_strategy_workers(
+            objective=args.objective,
+            observation=observation,
+            production_targets=production_targets,
+            available_skills=skill_catalog_payload(),
+            workers=workers,
+            timeout_seconds=args.timeout,
+        )
+        if not args.no_log:
+            cfg.log_dir.mkdir(parents=True, exist_ok=True)
+            with (cfg.log_dir / "strategy-worker-comparison.jsonl").open("a", encoding="utf-8") as log_file:
+                json.dump(result, log_file, ensure_ascii=False, separators=(",", ":"))
+                log_file.write("\n")
         print_json(result)
         return
 
