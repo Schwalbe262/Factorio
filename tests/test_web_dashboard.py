@@ -1,9 +1,15 @@
+import os
+from pathlib import Path
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from factorio_ai.networking import dashboard_urls
 from factorio_ai.web_dashboard import (
     FACTORIO_ROUTE,
     _token_usage_svg,
+    build_dashboard_state_cached,
+    clear_dashboard_state_cache,
     dashboard_path,
     friendly_dashboard_error,
     is_factorio_route,
@@ -268,6 +274,30 @@ class WebDashboardTests(unittest.TestCase):
     def test_dashboard_urls_use_lan_hosts_for_wildcard_bind(self):
         urls = dashboard_urls("0.0.0.0", 18889, "/factorio", base_url="http://10.0.0.5:18889")
         self.assertEqual(urls, ["http://10.0.0.5:18889/factorio"])
+
+    def test_dashboard_state_cache_reuses_recent_state(self):
+        cfg = SimpleNamespace(runtime_dir=Path("runtime"), log_dir=Path("logs"))
+        clear_dashboard_state_cache()
+        with (
+            patch.dict(os.environ, {"FACTORIO_AI_WEB_CACHE_SECONDS": "60"}),
+            patch(
+                "factorio_ai.web_dashboard.build_dashboard_state",
+                side_effect=[
+                    {"ok": True, "updated_at": "first"},
+                    {"ok": True, "updated_at": "second"},
+                ],
+            ) as build_state,
+        ):
+            first = build_dashboard_state_cached(cfg, "launch_rocket_program")
+            second = build_dashboard_state_cached(cfg, "launch_rocket_program")
+            refreshed = build_dashboard_state_cached(cfg, "launch_rocket_program", force_refresh=True)
+
+        self.assertEqual(build_state.call_count, 2)
+        self.assertFalse(first["cache"]["hit"])
+        self.assertTrue(second["cache"]["hit"])
+        self.assertEqual(second["updated_at"], "first")
+        self.assertFalse(refreshed["cache"]["hit"])
+        self.assertEqual(refreshed["updated_at"], "second")
 
 
 if __name__ == "__main__":

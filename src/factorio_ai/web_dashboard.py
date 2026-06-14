@@ -5,6 +5,8 @@ from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
+import threading
+import time
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
@@ -30,6 +32,10 @@ DEFAULT_LANG = "en"
 SUPPORTED_LANGS = {"en", "ko"}
 DEFAULT_PUBLIC_DASHBOARD_BASE_URL = "http://27.115.156.173:8787"
 KST = timezone(timedelta(hours=9), "KST")
+DEFAULT_WEB_CACHE_SECONDS = 30.0
+_DASHBOARD_STATE_CACHE: dict[str, dict[str, Any]] = {}
+_DASHBOARD_STATE_REFRESHING: set[str] = set()
+_DASHBOARD_STATE_CACHE_LOCK = threading.Lock()
 
 
 TEXT: dict[str, dict[str, str]] = {
@@ -286,6 +292,7 @@ def serve_dashboard(
 ) -> None:
     handler = make_dashboard_handler(cfg, objective)
     server = ThreadingHTTPServer((host, port), handler)
+    threading.Thread(target=_warm_dashboard_cache, args=(cfg, objective), daemon=True).start()
     try:
         server.serve_forever()
     finally:
@@ -308,7 +315,11 @@ def make_dashboard_handler(cfg: AppConfig, default_objective: str) -> type[BaseH
             lang = request_language(path, query, values)
             targets = parse_target_form(values)
             save_targets(cfg.runtime_dir, targets)
-            state = build_dashboard_state(cfg, values.get("objective", [default_objective])[0])
+            state = build_dashboard_state_cached(
+                cfg,
+                values.get("objective", [default_objective])[0],
+                force_refresh=True,
+            )
             html = render_dashboard(state, lang=lang).encode("utf-8")
             self._send(200, html, "text/html; charset=utf-8")
 
@@ -328,13 +339,13 @@ def make_dashboard_handler(cfg: AppConfig, default_objective: str) -> type[BaseH
 
             if path == FACTORIO_ROUTE:
                 lang = request_language(path, query)
-                state = build_dashboard_state(cfg, objective)
+                state = build_dashboard_state_cached(cfg, objective)
                 body = render_dashboard(state, lang=lang)
                 self._send(200, body.encode("utf-8"), "text/html; charset=utf-8")
                 return
 
             if path == API_ROUTE:
-                state = build_dashboard_state(cfg, objective)
+                state = build_dashboard_state_cached(cfg, objective)
                 self._send(
                     200,
                     json.dumps(state, ensure_ascii=False, indent=2).encode("utf-8"),
@@ -371,6 +382,13 @@ def make_dashboard_handler(cfg: AppConfig, default_objective: str) -> type[BaseH
             self.end_headers()
 
     return FactorioDashboardHandler
+
+
+def _warm_dashboard_cache(cfg: AppConfig, objective: str) -> None:
+    try:
+        build_dashboard_state_cached(cfg, objective, force_refresh=True)
+    except Exception:
+        return
 
 
 def normalized_path(path: str) -> str:
@@ -410,6 +428,86 @@ def public_dashboard_urls(host: str, port: int, lang: str = DEFAULT_LANG) -> lis
         or DEFAULT_PUBLIC_DASHBOARD_BASE_URL
     )
     return dashboard_urls(host, port, route, base_url=base_url)
+
+
+def clear_dashboard_state_cache() -> None:
+    with _DASHBOARD_STATE_CACHE_LOCK:
+        _DASHBOARD_STATE_CACHE.clear()
+        _DASHBOARD_STATE_REFRESHING.clear()
+
+
+def build_dashboard_state_cached(
+    cfg: AppConfig,
+    objective: str,
+    *,
+    force_refresh: bool = False,
+) -> dict[str, Any]:
+    ttl = _web_cache_seconds()
+    if ttl <= 0:
+        return build_dashboard_state(cfg, objective)
+    key = _dashboard_cache_key(cfg, objective)
+    now = time.monotonic()
+    with _DASHBOARD_STATE_CACHE_LOCK:
+        cached = _DASHBOARD_STATE_CACHE.get(key)
+        if not force_refresh and cached is not None:
+            age = now - float(cached.get("stored_at") or 0.0)
+            if age <= ttl:
+                return _dashboard_cached_state(cached.get("state"), hit=True, age_seconds=age, ttl_seconds=ttl)
+            _start_dashboard_cache_refresh_locked(cfg, objective, key)
+            return _dashboard_cached_state(cached.get("state"), hit=True, age_seconds=age, ttl_seconds=ttl)
+
+    state = build_dashboard_state(cfg, objective)
+    with _DASHBOARD_STATE_CACHE_LOCK:
+        _store_dashboard_state_locked(key, state)
+    return _dashboard_cached_state(state, hit=False, age_seconds=0.0, ttl_seconds=ttl)
+
+
+def _start_dashboard_cache_refresh_locked(cfg: AppConfig, objective: str, key: str) -> None:
+    if key in _DASHBOARD_STATE_REFRESHING:
+        return
+    _DASHBOARD_STATE_REFRESHING.add(key)
+    threading.Thread(target=_refresh_dashboard_cache, args=(cfg, objective, key), daemon=True).start()
+
+
+def _refresh_dashboard_cache(cfg: AppConfig, objective: str, key: str) -> None:
+    try:
+        state = build_dashboard_state(cfg, objective)
+        with _DASHBOARD_STATE_CACHE_LOCK:
+            _store_dashboard_state_locked(key, state)
+    finally:
+        with _DASHBOARD_STATE_CACHE_LOCK:
+            _DASHBOARD_STATE_REFRESHING.discard(key)
+
+
+def _store_dashboard_state_locked(key: str, state: dict[str, Any]) -> None:
+    _DASHBOARD_STATE_CACHE[key] = {"stored_at": time.monotonic(), "state": state}
+
+
+def _dashboard_cache_key(cfg: AppConfig, objective: str) -> str:
+    return "|".join([str(cfg.runtime_dir), str(cfg.log_dir), objective])
+
+
+def _dashboard_cached_state(
+    state: Any,
+    *,
+    hit: bool,
+    age_seconds: float,
+    ttl_seconds: float,
+) -> dict[str, Any]:
+    output = dict(state) if isinstance(state, dict) else {}
+    output["cache"] = {
+        "hit": hit,
+        "age_seconds": round(max(0.0, age_seconds), 3),
+        "ttl_seconds": round(ttl_seconds, 3),
+    }
+    return output
+
+
+def _web_cache_seconds() -> float:
+    try:
+        return max(0.0, float(os.getenv("FACTORIO_AI_WEB_CACHE_SECONDS", str(DEFAULT_WEB_CACHE_SECONDS))))
+    except (TypeError, ValueError):
+        return DEFAULT_WEB_CACHE_SECONDS
 
 
 def build_dashboard_state(cfg: AppConfig, objective: str) -> dict[str, Any]:
