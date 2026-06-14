@@ -191,6 +191,19 @@ class WebDashboardTests(unittest.TestCase):
                                 "checked_machines": 5,
                                 "powered_machines": 5,
                             },
+                            "site_prebuild_gate": {
+                                "status": "fail",
+                                "build_ready": False,
+                                "summary": "sandbox-proven layout still needs site-specific build checks",
+                                "errors": ["missing build items: assembling-machine-1 x5"],
+                                "warnings": [],
+                                "checks": {
+                                    "build_items": {
+                                        "status": "fail",
+                                        "summary": "missing build items: assembling-machine-1 x5",
+                                    }
+                                },
+                            },
                             "simulation": {
                                 "score": 88,
                                 "before": {"electronic_circuit_per_minute": 10},
@@ -327,6 +340,8 @@ class WebDashboardTests(unittest.TestCase):
         self.assertIn("layout-validation-pass", html)
         self.assertIn("layout-validation-fail", html)
         self.assertIn("expected output electronic-circuit", html)
+        self.assertIn("sandbox-proven layout still needs site-specific build checks", html)
+        self.assertIn("missing build items", html)
         self.assertIn("powered=5", html)
         self.assertIn("machines=5", html)
         self.assertIn("manual-copy-overlay", html)

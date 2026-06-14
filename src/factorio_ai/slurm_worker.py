@@ -240,12 +240,14 @@ def run_layout_improvement_request(payload: dict[str, Any]) -> dict[str, Any]:
     )
     if parsed is None:
         result = heuristic_layout_improvement(compact)
+        result = _apply_layout_candidate_gate(result, compact)
         result["source"] = "heuristic"
         result["ok"] = True
         result.update({key: value for key, value in diagnostics.items() if value not in (None, "")})
         result["llm_prompt_chars"] = len(prompt)
         return result
     result = normalize_layout_response(parsed)
+    result = _apply_layout_candidate_gate(result, compact)
     result["source"] = "llm"
     result["ok"] = True
     result["llm_prompt_chars"] = len(prompt)
@@ -285,6 +287,7 @@ def compact_layout_improvement_payload(payload: dict[str, Any]) -> dict[str, Any
             "Prefer candidates that reduce bottlenecks, footprint, transport distance, or ratio error.",
             "Treat candidate validation failures as training feedback: explain the exact inserter, belt, power, or collision reason and do not mark it build-ready.",
             "If sandbox_validation is fail, use its lesson and reasons in the next candidate design.",
+            "Sandbox pass is not site-ready; if site_prebuild_gate is fail or build_ready is false, keep the candidate simulation-only.",
             "Flag belt-capacity risk when required item flow approaches or exceeds belt capacity.",
             "The output can be used later by a deterministic executor after explicit approval.",
         ],
@@ -324,33 +327,77 @@ def heuristic_layout_improvement(compact: dict[str, Any]) -> dict[str, Any]:
             not isinstance(item.get("sandbox_validation"), dict)
             or item["sandbox_validation"].get("status") in {None, "", "pass", "warning"}
         )
+        and (
+            not isinstance(item.get("site_prebuild_gate"), dict)
+            or item["site_prebuild_gate"].get("status") in {None, "", "pass", "warning"}
+        )
     ]
     selected = valid_candidates[0] if valid_candidates else (candidates[0] if candidates and isinstance(candidates[0], dict) else {})
     simulation = selected.get("simulation") if isinstance(selected.get("simulation"), dict) else {}
     validation = selected.get("validation") if isinstance(selected.get("validation"), dict) else {}
     sandbox_validation = selected.get("sandbox_validation") if isinstance(selected.get("sandbox_validation"), dict) else {}
+    site_gate = selected.get("site_prebuild_gate") if isinstance(selected.get("site_prebuild_gate"), dict) else {}
     validation_errors = validation.get("errors") if isinstance(validation.get("errors"), list) else []
     validation_warnings = validation.get("warnings") if isinstance(validation.get("warnings"), list) else []
     validation_status = str(validation.get("status") or "")
     sandbox_reasons = sandbox_validation.get("reasons") if isinstance(sandbox_validation.get("reasons"), list) else []
     sandbox_status = str(sandbox_validation.get("status") or "")
+    site_gate_status = str(site_gate.get("status") or "")
+    site_gate_errors = site_gate.get("errors") if isinstance(site_gate.get("errors"), list) else []
+    site_gate_warnings = site_gate.get("warnings") if isinstance(site_gate.get("warnings"), list) else []
     risks = ["Static simulation only; exact tiles, belts, inserters, power, and collisions are not validated here."]
     if validation_status:
         risks.append(f"static_validation={validation_status}")
     if sandbox_status:
         risks.append(f"sandbox_validation={sandbox_status}")
+    if site_gate_status:
+        risks.append(f"site_prebuild_gate={site_gate_status}")
     risks.extend(str(item) for item in (validation_errors or validation_warnings)[:4])
     risks.extend(str(item) for item in sandbox_reasons[:4])
+    risks.extend(str(item) for item in (site_gate_errors or site_gate_warnings)[:4])
     return {
         "selected_candidate_id": selected.get("candidate_id"),
         "score": _int_value(simulation.get("score"), 50),
-        "reasoning": "Selected the highest-scored simulation-only layout candidate that does not have a static validation failure.",
+        "reasoning": "Selected the highest-scored simulation-only layout candidate while preserving no-apply and pre-build gate guardrails.",
         "expected_improvements": [str(simulation.get("delta") or "layout simulation delta")],
         "risks": risks,
         "next_simulation_focus": "Generate another candidate or refine the current one against real site/link data.",
         "build_ready": False,
         "no_apply": True,
     }
+
+
+def _apply_layout_candidate_gate(result: dict[str, Any], compact: dict[str, Any]) -> dict[str, Any]:
+    output = dict(result)
+    output["no_apply"] = True
+    layout = compact.get("layout_improvement") if isinstance(compact.get("layout_improvement"), dict) else {}
+    candidates = layout.get("simulation_candidates") if isinstance(layout.get("simulation_candidates"), list) else []
+    candidate_id = str(output.get("selected_candidate_id") or "")
+    selected = next(
+        (
+            item
+            for item in candidates
+            if isinstance(item, dict) and str(item.get("candidate_id") or "") == candidate_id
+        ),
+        None,
+    )
+    if selected is None:
+        return output
+    risks = _string_list(output.get("risks"))
+    if selected.get("build_ready") is False:
+        output["build_ready"] = False
+    site_gate = selected.get("site_prebuild_gate") if isinstance(selected.get("site_prebuild_gate"), dict) else {}
+    if site_gate:
+        status = str(site_gate.get("status") or "")
+        gate_ready = bool(site_gate.get("build_ready"))
+        if status != "pass" or not gate_ready:
+            output["build_ready"] = False
+            summary = str(site_gate.get("summary") or "site pre-build gate is not ready")
+            message = f"site_prebuild_gate={status or 'unknown'}: {summary}"
+            if message not in risks:
+                risks.append(message)
+    output["risks"] = risks
+    return output
 
 
 def run_strategy_model_benchmark(payload: dict[str, Any]) -> dict[str, Any]:
@@ -939,12 +986,15 @@ def _compact_layout_candidate(value: dict[str, Any]) -> dict[str, Any]:
     simulation = value.get("simulation") if isinstance(value.get("simulation"), dict) else {}
     validation = value.get("validation") if isinstance(value.get("validation"), dict) else {}
     sandbox_validation = value.get("sandbox_validation") if isinstance(value.get("sandbox_validation"), dict) else {}
+    site_gate = value.get("site_prebuild_gate") if isinstance(value.get("site_prebuild_gate"), dict) else {}
     return {
         "candidate_id": _compact_value(value.get("candidate_id"), string_limit=90),
         "simulation_only": bool(value.get("simulation_only")),
         "not_applied": bool(value.get("not_applied")),
         "target_pattern": _compact_value(value.get("target_pattern"), string_limit=120),
         "requires_build_command": bool(value.get("requires_build_command")),
+        "requires_site_prebuild_gate": bool(value.get("requires_site_prebuild_gate")),
+        "build_ready": bool(value.get("build_ready")),
         "validation": {
             "status": validation.get("status"),
             "checked_machines": validation.get("checked_machines"),
@@ -966,6 +1016,18 @@ def _compact_layout_candidate(value: dict[str, Any]) -> dict[str, Any]:
         }
         if sandbox_validation
         else {},
+        "site_prebuild_gate": {
+            "status": site_gate.get("status"),
+            "build_ready": bool(site_gate.get("build_ready")),
+            "summary": _compact_value(site_gate.get("summary"), string_limit=140),
+            "anchor": _compact_position(site_gate.get("anchor")),
+            "errors": _compact_value(site_gate.get("errors"), string_limit=140, list_limit=4),
+            "warnings": _compact_value(site_gate.get("warnings"), string_limit=140, list_limit=4),
+            "checks": _compact_site_gate_checks(site_gate.get("checks")),
+        }
+        if site_gate
+        else {},
+        "sandbox_validation_lesson": _compact_value(value.get("sandbox_validation_lesson"), string_limit=180),
         "sandbox_lesson": _compact_value(value.get("sandbox_validation_lesson"), string_limit=180),
         "simulation": {
             "score": simulation.get("score"),
@@ -974,6 +1036,20 @@ def _compact_layout_candidate(value: dict[str, Any]) -> dict[str, Any]:
             "delta": _compact_value(simulation.get("delta"), string_limit=80, list_limit=5),
         },
     }
+
+
+def _compact_site_gate_checks(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    output: dict[str, Any] = {}
+    for key, check in list(value.items())[:8]:
+        if not isinstance(check, dict):
+            continue
+        output[str(key)] = {
+            "status": check.get("status"),
+            "summary": _compact_value(check.get("summary"), string_limit=120),
+        }
+    return output
 
 
 def _monitor_layout_issue(

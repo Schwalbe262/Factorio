@@ -1,10 +1,10 @@
 # Factorio Automation CLI Handoff
 
-Last updated: 2026-06-14 20:07 KST
+Last updated: 2026-06-14 20:21 KST
 Repository: `C:\Users\NEC\Documents\Factorio`
 GitHub: `https://github.com/Schwalbe262/Factorio_automation`
 Current branch: `master`
-Part 67 baseline before this handoff update: `59d31ef Part 66: clarify handoff commit reference`
+Part 68 baseline before this handoff update: `346fe9e Part 67: fix green circuit sandbox validation`
 
 ## Goal
 
@@ -172,6 +172,34 @@ Current Part 67 live finding:
   - `powered_inserters`: `12`
   - warning remains: intermittent source-item waits may indicate supply/belt-side risk, but the candidate did produce expected output.
 
+Part 68 adds a site-specific pre-build gate for sandbox-proven layouts:
+
+- `src/factorio_ai/planner.py`
+  - `green-circuit-3-cable-2-circuit-cell` now has `requires_site_prebuild_gate`, candidate-level `build_ready`, and `site_prebuild_gate`.
+  - The gate anchors the proposed blueprint at the current circuit-site centroid when available, otherwise the player position.
+  - Checks include:
+    - available build items for all blueprint entities.
+    - collisions against currently observed map entities.
+    - protected starter resource overlap.
+    - reach from planned poles to an existing connected power pole.
+    - local logistics or stock fallback for `iron-plate` and `copper-plate`.
+  - The current test fixture intentionally yields static validation `pass` but site gate `fail`, so sandbox-proven does not mean site-ready.
+
+- `src/factorio_ai/slurm_worker.py`
+  - Compact layout payload now includes candidate `site_prebuild_gate` status, build-ready flag, summary, anchor, errors/warnings, and per-check summaries.
+  - Layout rules now explicitly say sandbox pass is not site-ready.
+  - Heuristic and LLM layout responses are post-processed so a selected candidate with `site_prebuild_gate != pass` or `build_ready=false` is forced back to `build_ready=false`.
+  - Existing `sandbox_validation_lesson` payload key is preserved; `sandbox_lesson` remains as a short alias.
+
+- `src/factorio_ai/web_dashboard.py`
+  - Candidate cards now show a third validation row: `Pre-build`.
+  - The validation panel renderer displays a gate `summary` plus the first errors/warnings, so operators see why a candidate is not build-ready.
+
+- Tests updated:
+  - `tests/test_planner.py`
+  - `tests/test_slurm_worker.py`
+  - `tests/test_web_dashboard.py`
+
 ## Verification Already Run
 
 Focused tests:
@@ -240,6 +268,24 @@ pytest -q
 
 Result: `317 passed`
 
+Part 68 focused tests:
+
+```powershell
+$env:PYTHONPATH='src'
+pytest -q tests/test_planner.py tests/test_slurm_worker.py tests/test_web_dashboard.py
+```
+
+Result: `133 passed`
+
+Part 68 full test suite:
+
+```powershell
+$env:PYTHONPATH='src'
+pytest -q
+```
+
+Result: `317 passed`
+
 Part 66 token usage sample:
 
 ```powershell
@@ -257,6 +303,15 @@ python -m factorio_ai.cli record-token-usage --tokens-used 35232450 --label "par
 ```
 
 Result: appended `delta_tokens=91011` to `logs/token_usage.jsonl`, which is read by the web dashboard token graph.
+
+Part 68 token usage sample:
+
+```powershell
+$env:PYTHONPATH='src'
+python -m factorio_ai.cli record-token-usage --tokens-used 35462230 --label "part68 site prebuild gate final"
+```
+
+Result: appended a final `delta_tokens=20480` row to `logs/token_usage.jsonl`; combined Part 68 rows total `229780` tokens and are read by the web dashboard token graph.
 
 ## Live Smoke Checks Already Run
 
@@ -279,6 +334,22 @@ Current generated candidate inspection from dashboard state:
   - after blueprint entities include `assembling-machine-1`, `inserter`, `iron-chest`, `small-electric-pole`, `transport-belt`
   - before blueprint names include `assembling-machine-1`, `inserter`, `small-electric-pole`
   - before blueprint no longer includes boiler/steam-engine/offshore-pump.
+
+Part 68 dashboard HTTP smoke:
+
+```powershell
+$env:PYTHONPATH='src'
+python -m factorio_ai.cli web --host 127.0.0.1 --port 18890 --objective launch_rocket_program
+Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:18890/factorio?lang=en&objective=launch_rocket_program'
+```
+
+Result:
+
+- Local dashboard HTTP smoke ran on port `18890`; the validation process was stopped after the smoke.
+- HTTP response contained `Pre-build`.
+- HTTP response contained `green-circuit-3-cable-2-circuit-cell`.
+- HTTP response contained the site-gate/pre-build text.
+- The in-app Browser plugin was attempted, but no `iab` browser was available (`agent.browsers` returned an empty list), so no browser screenshot was captured.
 
 ## Important Caveat: Blueprint Validation
 
@@ -320,38 +391,20 @@ This file can later be transformed into Qwen fine-tuning examples.
 
 ## Next Implementation Priority
 
-If Part 66 is not yet committed/pushed, finish it first:
+Part 68 makes sandbox-proven layouts non-build-ready until site checks pass. Next work should convert that gate into actionable placement/build planning:
 
-1. Record token usage for Part 66 with `python -m factorio_ai.cli record-token-usage ...`.
-2. Commit and push Part 66:
-
-```powershell
-git add src/factorio_ai/layout_validation.py src/factorio_ai/cli.py src/factorio_ai/controller.py src/factorio_ai/remote_slurm.py src/factorio_ai/slurm_worker.py src/factorio_ai/web_dashboard.py tests/test_layout_validation.py tests/test_slurm_worker.py tests/test_web_dashboard.py docs/CLI_HANDOFF.md
-git commit -m "Part 66: sandbox validate layout candidates"
-git push origin master
-```
-
-Part 67 should be committed/pushed if not already done:
-
-```powershell
-git add src/factorio_ai/planner.py src/factorio_ai/layout_validation.py src/factorio_ai/slurm_worker.py tests/test_planner.py docs/CLI_HANDOFF.md
-git commit -m "Part 67: fix green circuit sandbox validation"
-git push origin master
-```
-
-Then use the sandbox-passing candidate carefully:
-
-1. Treat `green-circuit-3-cable-2-circuit-cell` as sandbox-proven, not automatically site-ready.
-2. Add a site-specific pre-build gate that checks collision, nearby resource preservation, power reach, available build items, and logistics connection to real iron/copper supply.
-3. Consider exporting `logs/layout-validation-feedback.jsonl` rows into Qwen fine-tuning examples later.
-4. Rerun before any future build-ready claim:
+1. Pick or reserve a real candidate site for the green-circuit cell instead of anchoring directly on the current circuit-site centroid.
+2. Add a deterministic pre-build placement search that finds a nearby collision-free, resource-safe anchor with power and plate logistics within reach.
+3. Add or surface the exact missing build items and logistics blockers as build-item-mall / belt / power tasks.
+4. Consider exporting `logs/layout-validation-feedback.jsonl` and `site_prebuild_gate` rows into Qwen fine-tuning examples later.
+5. Rerun before any future build-ready claim:
 
 ```powershell
 $env:PYTHONPATH='src'
 python -m factorio_ai.cli validate-layout-candidate --candidate-id green-circuit-3-cable-2-circuit-cell --variant after --ticks 3600 --player r1jae
 ```
 
-5. Only mark the candidate build-ready after both sandbox validation and site-specific checks pass.
+6. Only mark the candidate build-ready after sandbox validation, site pre-build gate, and deterministic site placement checks all pass.
 
 ## Core Commands
 

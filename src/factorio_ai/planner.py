@@ -42,6 +42,10 @@ SMELTING_LINE_FUEL_INSERT = {
     "furnace": 16,
 }
 ASSEMBLER_ENTITY_NAMES = {"assembling-machine-1", "assembling-machine-2", "assembling-machine-3"}
+POWER_CONNECTOR_NAMES = {"small-electric-pole", "medium-electric-pole", "big-electric-pole", "substation"}
+PROTECTED_RESOURCE_NAMES = {"iron-ore", "copper-ore", "coal", "stone", "uranium-ore"}
+SITE_GATE_INPUT_STOCK_FALLBACK = 20
+SITE_GATE_LOCAL_LOGISTICS_RADIUS = 96.0
 
 
 class FactoryLayoutImprovementSkill:
@@ -354,7 +358,7 @@ def factory_layout_simulation_candidates(observation: dict[str, Any]) -> list[di
         ]
         candidates.append(
             _with_blueprint_variants(
-                _green_circuit_layout_candidate(recipe_counts),
+                _green_circuit_layout_candidate(recipe_counts, observation, sites, current_circuit_sites),
                 _combined_site_blueprint(
                     "before-green-circuit-block",
                     current_circuit_sites,
@@ -650,7 +654,393 @@ def _safe_density(count: int, footprint: dict[str, float]) -> float:
     return round(count / area, 4)
 
 
-def _green_circuit_layout_candidate(recipe_counts: Counter[str]) -> dict[str, Any]:
+def _site_prebuild_gate(
+    observation: dict[str, Any],
+    blueprint_entities: list[dict[str, Any]],
+    *,
+    target_item: str,
+    required_inputs: tuple[str, ...],
+    all_sites: list[dict[str, Any]],
+    preferred_sites: list[dict[str, Any]],
+) -> dict[str, Any]:
+    anchor, anchor_source = _site_gate_anchor(observation, preferred_sites)
+    planned_entities = _absolute_blueprint_entities(blueprint_entities, anchor)
+    checks = {
+        "build_items": _site_gate_build_item_check(observation, blueprint_entities),
+        "collision": _site_gate_collision_check(observation, planned_entities),
+        "resource_preservation": _site_gate_resource_check(observation, planned_entities),
+        "power_reach": _site_gate_power_check(observation, planned_entities),
+        "input_logistics": _site_gate_input_logistics_check(
+            observation,
+            all_sites,
+            target_item=target_item,
+            required_inputs=required_inputs,
+            anchor=anchor,
+        ),
+    }
+    errors: list[str] = []
+    warnings: list[str] = []
+    if anchor_source == "player_position":
+        warnings.append("no current target site was found; pre-build gate anchored to player position")
+    for check_name, check in checks.items():
+        if not isinstance(check, dict):
+            continue
+        detail = str(check.get("summary") or check_name)
+        if check.get("status") == "fail":
+            errors.append(detail)
+        elif check.get("status") == "warning":
+            warnings.append(detail)
+    status = "fail" if errors else ("warning" if warnings else "pass")
+    return {
+        "status": status,
+        "build_ready": status == "pass",
+        "summary": (
+            "site-specific build gate passed"
+            if status == "pass"
+            else "sandbox-proven layout still needs site-specific build checks"
+        ),
+        "anchor": anchor,
+        "anchor_source": anchor_source,
+        "target_item": target_item,
+        "checks": checks,
+        "errors": errors[:8],
+        "warnings": warnings[:8],
+    }
+
+
+def _site_gate_anchor(
+    observation: dict[str, Any],
+    preferred_sites: list[dict[str, Any]],
+) -> tuple[dict[str, float], str]:
+    positions = [
+        site.get("position")
+        for site in preferred_sites
+        if isinstance(site, dict) and isinstance(site.get("position"), dict)
+    ]
+    centroid = _centroid(positions)
+    if centroid is not None:
+        return centroid, "current_site_centroid"
+    return player_position(observation), "player_position"
+
+
+def _absolute_blueprint_entities(
+    blueprint_entities: list[dict[str, Any]],
+    anchor: dict[str, float],
+) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    for entity in blueprint_entities:
+        if not isinstance(entity, dict) or not isinstance(entity.get("position"), dict):
+            continue
+        position = entity["position"]
+        row = dict(entity)
+        row["position"] = {
+            "x": round(float(anchor.get("x") or 0.0) + float(position.get("x") or 0.0), 3),
+            "y": round(float(anchor.get("y") or 0.0) + float(position.get("y") or 0.0), 3),
+        }
+        output.append(row)
+    return output
+
+
+def _site_gate_build_item_check(
+    observation: dict[str, Any],
+    blueprint_entities: list[dict[str, Any]],
+) -> dict[str, Any]:
+    required = Counter(
+        str(entity.get("name") or "")
+        for entity in blueprint_entities
+        if isinstance(entity, dict) and entity.get("name")
+    )
+    available = {name: total_item_count(observation, name) for name in sorted(required)}
+    missing = {
+        name: count - int(available.get(name) or 0)
+        for name, count in sorted(required.items())
+        if int(available.get(name) or 0) < count
+    }
+    status = "fail" if missing else "pass"
+    return {
+        "status": status,
+        "required": dict(sorted(required.items())),
+        "available": available,
+        "missing": missing,
+        "summary": _site_gate_missing_summary("missing build items", missing)
+        if missing
+        else "all blueprint build items are available",
+    }
+
+
+def _site_gate_collision_check(
+    observation: dict[str, Any],
+    planned_entities: list[dict[str, Any]],
+) -> dict[str, Any]:
+    existing_entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
+    collisions: list[dict[str, Any]] = []
+    for planned in planned_entities:
+        planned_position = planned.get("position") if isinstance(planned.get("position"), dict) else None
+        if planned_position is None:
+            continue
+        planned_radius = _site_gate_collision_radius(str(planned.get("name") or ""))
+        for existing in existing_entities:
+            if not isinstance(existing, dict) or not isinstance(existing.get("position"), dict):
+                continue
+            existing_radius = _site_gate_collision_radius(str(existing.get("name") or ""))
+            if distance(planned_position, existing["position"]) > planned_radius + existing_radius:
+                continue
+            collisions.append(
+                {
+                    "planned": str(planned.get("name") or ""),
+                    "existing": str(existing.get("name") or ""),
+                    "position": planned_position,
+                    "existing_position": existing["position"],
+                }
+            )
+            break
+        if len(collisions) >= 8:
+            break
+    return {
+        "status": "fail" if collisions else "pass",
+        "collisions": collisions,
+        "summary": f"{len(collisions)} planned entities collide with current map entities"
+        if collisions
+        else "planned entity footprint has no observed collisions",
+    }
+
+
+def _site_gate_resource_check(
+    observation: dict[str, Any],
+    planned_entities: list[dict[str, Any]],
+) -> dict[str, Any]:
+    resources = observation.get("resources") if isinstance(observation.get("resources"), list) else []
+    protected = [
+        resource
+        for resource in resources
+        if isinstance(resource, dict)
+        and str(resource.get("name") or "") in PROTECTED_RESOURCE_NAMES
+        and isinstance(resource.get("position"), dict)
+    ]
+    overlaps: list[dict[str, Any]] = []
+    for planned in planned_entities:
+        name = str(planned.get("name") or "")
+        if not _site_gate_blocks_resource(name):
+            continue
+        planned_position = planned.get("position") if isinstance(planned.get("position"), dict) else None
+        if planned_position is None:
+            continue
+        for resource in protected:
+            if distance(planned_position, resource["position"]) > _site_gate_collision_radius(name) + 0.75:
+                continue
+            overlaps.append(
+                {
+                    "planned": name,
+                    "resource": str(resource.get("name") or ""),
+                    "position": planned_position,
+                    "resource_position": resource["position"],
+                }
+            )
+            break
+        if len(overlaps) >= 8:
+            break
+    return {
+        "status": "fail" if overlaps else "pass",
+        "overlaps": overlaps,
+        "summary": f"{len(overlaps)} planned entities overlap protected resource tiles"
+        if overlaps
+        else "no protected resource overlap detected",
+    }
+
+
+def _site_gate_power_check(
+    observation: dict[str, Any],
+    planned_entities: list[dict[str, Any]],
+) -> dict[str, Any]:
+    planned_poles = [
+        entity
+        for entity in planned_entities
+        if isinstance(entity, dict)
+        and str(entity.get("name") or "") in POWER_CONNECTOR_NAMES
+        and isinstance(entity.get("position"), dict)
+    ]
+    entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
+    connected_poles = [
+        entity
+        for entity in entities
+        if isinstance(entity, dict)
+        and str(entity.get("name") or "") in POWER_CONNECTOR_NAMES
+        and entity.get("electric_network_connected") is not False
+        and isinstance(entity.get("position"), dict)
+    ]
+    if not planned_poles:
+        return {
+            "status": "fail",
+            "planned_poles": 0,
+            "connected_poles": len(connected_poles),
+            "summary": "blueprint has no power pole to connect the new cell",
+        }
+    if not connected_poles:
+        return {
+            "status": "fail",
+            "planned_poles": len(planned_poles),
+            "connected_poles": 0,
+            "summary": "no connected existing power pole is in the observed site data",
+        }
+    nearest = _nearest_power_pair(planned_poles, connected_poles)
+    if nearest is None:
+        return {
+            "status": "fail",
+            "planned_poles": len(planned_poles),
+            "connected_poles": len(connected_poles),
+            "summary": "could not compare planned and existing power poles",
+        }
+    status = "pass" if nearest["distance"] <= nearest["wire_reach"] else "fail"
+    return {
+        "status": status,
+        "planned_poles": len(planned_poles),
+        "connected_poles": len(connected_poles),
+        "nearest_connected_power": nearest,
+        "summary": (
+            f"nearest connected pole is {nearest['distance']:.1f} tiles away within {nearest['wire_reach']:.1f} reach"
+            if status == "pass"
+            else f"nearest connected pole is {nearest['distance']:.1f} tiles away, beyond {nearest['wire_reach']:.1f} reach"
+        ),
+    }
+
+
+def _site_gate_input_logistics_check(
+    observation: dict[str, Any],
+    sites: list[dict[str, Any]],
+    *,
+    target_item: str,
+    required_inputs: tuple[str, ...],
+    anchor: dict[str, float],
+) -> dict[str, Any]:
+    inputs: dict[str, dict[str, Any]] = {}
+    missing: list[str] = []
+    for item in required_inputs:
+        source = _nearest_source_site(sites, item, anchor)
+        stock = total_item_count(observation, item)
+        local_source = bool(source and float(source.get("distance") or 0.0) <= SITE_GATE_LOCAL_LOGISTICS_RADIUS)
+        stock_ready = stock >= SITE_GATE_INPUT_STOCK_FALLBACK
+        status = "pass" if local_source or stock_ready else "fail"
+        if status == "fail":
+            missing.append(item)
+        inputs[item] = {
+            "status": status,
+            "stock": stock,
+            "stock_fallback": SITE_GATE_INPUT_STOCK_FALLBACK,
+            "local_source_radius": SITE_GATE_LOCAL_LOGISTICS_RADIUS,
+            "nearest_source": source,
+        }
+    return {
+        "status": "fail" if missing else "pass",
+        "target_item": target_item,
+        "inputs": inputs,
+        "summary": f"missing local input logistics for {', '.join(missing)}"
+        if missing
+        else f"input logistics are available for {target_item}",
+    }
+
+
+def _nearest_source_site(
+    sites: list[dict[str, Any]],
+    item: str,
+    anchor: dict[str, float],
+) -> dict[str, Any] | None:
+    candidates = [
+        site
+        for site in sites
+        if isinstance(site, dict)
+        and site.get("item") == item
+        and site.get("kind") in {"plate_smelting_line", "build_item_mall", "assembler_cell", "circuit_automation"}
+        and isinstance(site.get("position"), dict)
+    ]
+    if not candidates:
+        return None
+    site = min(candidates, key=lambda row: distance(anchor, row["position"]))
+    return {
+        "site_id": site.get("site_id"),
+        "kind": site.get("kind"),
+        "position": site.get("position"),
+        "distance": round(distance(anchor, site["position"]), 1),
+        "status": site.get("status"),
+    }
+
+
+def _nearest_power_pair(
+    planned_poles: list[dict[str, Any]],
+    connected_poles: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    best: dict[str, Any] | None = None
+    for planned in planned_poles:
+        planned_name = str(planned.get("name") or "")
+        planned_position = planned.get("position") if isinstance(planned.get("position"), dict) else None
+        if planned_position is None:
+            continue
+        for existing in connected_poles:
+            existing_position = existing.get("position") if isinstance(existing.get("position"), dict) else None
+            if existing_position is None:
+                continue
+            existing_name = str(existing.get("name") or "")
+            span = round(distance(planned_position, existing_position), 1)
+            reach = max(_power_wire_reach(planned_name), _power_wire_reach(existing_name))
+            row = {
+                "distance": span,
+                "wire_reach": reach,
+                "planned": planned_name,
+                "planned_position": planned_position,
+                "existing": existing_name,
+                "existing_position": existing_position,
+            }
+            if best is None or row["distance"] < best["distance"]:
+                best = row
+    return best
+
+
+def _site_gate_collision_radius(name: str) -> float:
+    if name in ASSEMBLER_ENTITY_NAMES or name in {"lab", "boiler"}:
+        return 1.5
+    if name in {"stone-furnace", "steel-furnace", "electric-furnace"}:
+        return 1.0
+    if name in {"steam-engine", "oil-refinery", "chemical-plant"}:
+        return 2.0
+    return 0.55
+
+
+def _site_gate_blocks_resource(name: str) -> bool:
+    return name in ASSEMBLER_ENTITY_NAMES or name in {
+        "stone-furnace",
+        "steel-furnace",
+        "electric-furnace",
+        "boiler",
+        "steam-engine",
+        "lab",
+        "wooden-chest",
+        "iron-chest",
+        "steel-chest",
+    }
+
+
+def _power_wire_reach(name: str) -> float:
+    return {
+        "small-electric-pole": 7.5,
+        "medium-electric-pole": 9.0,
+        "big-electric-pole": 30.0,
+        "substation": 18.0,
+    }.get(name, 7.5)
+
+
+def _site_gate_missing_summary(prefix: str, missing: dict[str, int]) -> str:
+    if not missing:
+        return prefix
+    parts = [f"{name} x{count}" for name, count in list(missing.items())[:5]]
+    suffix = "" if len(missing) <= 5 else f" (+{len(missing) - 5} more)"
+    return f"{prefix}: {', '.join(parts)}{suffix}"
+
+
+def _green_circuit_layout_candidate(
+    recipe_counts: Counter[str],
+    observation: dict[str, Any],
+    all_sites: list[dict[str, Any]],
+    current_circuit_sites: list[dict[str, Any]],
+) -> dict[str, Any]:
     current_cable = int(recipe_counts.get("copper-cable", 0))
     current_circuit = int(recipe_counts.get("electronic-circuit", 0))
     current_circuit = max(current_circuit, 1)
@@ -664,6 +1054,14 @@ def _green_circuit_layout_candidate(recipe_counts: Counter[str]) -> dict[str, An
         score += 5.0
     after_entities = _green_circuit_blueprint_entities(groups)
     validation = _blueprint_operability_report(after_entities)
+    site_gate = _site_prebuild_gate(
+        observation,
+        after_entities,
+        target_item="electronic-circuit",
+        required_inputs=("iron-plate", "copper-plate"),
+        all_sites=all_sites,
+        preferred_sites=current_circuit_sites,
+    )
     return {
         "candidate_id": "green-circuit-3-cable-2-circuit-cell",
         "simulation_only": True,
@@ -671,12 +1069,15 @@ def _green_circuit_layout_candidate(recipe_counts: Counter[str]) -> dict[str, An
         "source": "rate-calculator-style static recipe throughput",
         "target_pattern": "3 copper-cable assemblers belt-feeding 2 electronic-circuit assemblers",
         "requires_build_command": True,
+        "requires_site_prebuild_gate": True,
+        "build_ready": bool(site_gate.get("build_ready")),
         "blueprint": _blueprint_export(
             "green-circuit-3-cable-2-circuit-cell",
             after_entities,
             "Simulation-only 3:2 green circuit cell. Validate exact input belts, power, and collision before applying.",
         ),
         "validation": validation,
+        "site_prebuild_gate": site_gate,
         "simulation": {
             "before": {
                 "copper_cable_assemblers": current_cable,

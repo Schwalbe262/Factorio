@@ -287,6 +287,7 @@ TEXT["en"].update(
         "copy_after_blueprint": "Copy after",
         "validation": "Validation",
         "sandbox_validation": "Sandbox",
+        "prebuild_gate": "Pre-build",
         "validation_pass": "Pass",
         "validation_warning": "Warning",
         "validation_fail": "Fail",
@@ -320,6 +321,7 @@ TEXT["ko"].update(
         "copy_after_blueprint": "\uac1c\uc120 \ud6c4 \ubcf5\uc0ac",
         "validation": "\uac80\uc99d",
         "sandbox_validation": "\uc0cc\ub4dc\ubc15\uc2a4",
+        "prebuild_gate": "\uc0ac\uc804 \ube4c\ub4dc",
         "validation_pass": "\ud1b5\uacfc",
         "validation_warning": "\uacbd\uace0",
         "validation_fail": "\uc2e4\ud328",
@@ -1645,6 +1647,7 @@ def _layout_candidate_table(rows: list[Any], lang: str) -> str:
             f"<p class=\"layout-candidate-pattern\">{escape(str(row.get('target_pattern') or ''))}</p>"
             f"{_layout_validation_panel(row.get('validation'), lang)}"
             f"{_layout_validation_panel(row.get('sandbox_validation'), lang, title_key='sandbox_validation')}"
+            f"{_layout_validation_panel(row.get('site_prebuild_gate'), lang, title_key='prebuild_gate')}"
             "<div class=\"layout-candidate-metrics\">"
             f"{_layout_metric_box(_t(lang, 'before'), simulation.get('before'))}"
             f"{_layout_metric_box(_t(lang, 'after'), simulation.get('after'))}"
@@ -1669,11 +1672,19 @@ def _layout_validation_panel(value: Any, lang: str, *, title_key: str = "validat
     if not isinstance(messages, list):
         messages = value.get("reasons") if isinstance(value.get("reasons"), list) else []
     detail = "; ".join(str(item) for item in messages[:2])
+    summary = str(value.get("summary") or "")
     checked = value.get("checked_machines")
     powered = value.get("powered_machines")
     inserters = value.get("checked_inserters")
     powered_inserters = value.get("powered_inserters")
-    detail_text = f"{detail} " if detail else ""
+    detail_parts = []
+    if summary:
+        detail_parts.append(summary)
+    if detail and detail not in detail_parts:
+        detail_parts.append(detail)
+    detail_text = "; ".join(detail_parts)
+    if detail_text:
+        detail_text += " "
     if checked is not None:
         detail_text += f"machines={checked}"
     if powered is not None:
