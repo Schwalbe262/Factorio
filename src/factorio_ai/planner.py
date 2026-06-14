@@ -26,6 +26,16 @@ SOUTH = 8
 WEST = 12
 FURNACE_RESOURCE_RADIUS = 12.0
 WALK_FUEL_LOGISTICS_LIMIT = 160.0
+SMELTING_LINE_FUEL_RESERVE = {
+    "drill": 8,
+    "inserter": 4,
+    "furnace": 8,
+}
+SMELTING_LINE_FUEL_INSERT = {
+    "drill": 16,
+    "inserter": 8,
+    "furnace": 16,
+}
 
 
 class FactoryLayoutImprovementSkill:
@@ -1637,15 +1647,21 @@ class _ExpandPlateSmeltingSkill:
         )
 
     def next_action(self, observation: dict[str, Any]) -> PlannerDecision:
+        player = player_position(observation)
+        low_fuel_layout = _find_low_fuel_belt_smelting_line(observation, self.resource_name)
+        if low_fuel_layout is not None:
+            decision = self._fuel_line_to_reserve(observation, player, low_fuel_layout)
+            if decision is not None:
+                return decision
+
         estimated_rate = _estimated_plate_rate(observation, self.product_name, self.resource_name)
         if estimated_rate >= self.target_rate_per_minute:
             return PlannerDecision(
                 None,
                 f"{self.product_name} smelting capacity target reached: {estimated_rate}/{self.target_rate_per_minute}/min",
                 done=True,
-        )
+            )
 
-        player = player_position(observation)
         layout = (
             _find_unfueled_belt_smelting_line(observation, self.resource_name)
             or _find_incomplete_belt_smelting_line(observation, self.resource_name)
@@ -1709,29 +1725,68 @@ class _ExpandPlateSmeltingSkill:
                 action["direction"] = direction
             return PlannerDecision(action, f"place {name} for expanded {self.product_name} smelting")
 
-        for entity_name, item, threshold, count in [
-            ("burner-mining-drill", "coal", 3, 5),
-            ("burner-inserter", "coal", 2, 3),
-            ("stone-furnace", "coal", 3, 5),
+        reserve_decision = self._fuel_line_to_reserve(observation, player, layout)
+        if reserve_decision is not None:
+            return reserve_decision
+
+        return PlannerDecision(
+            {"type": "wait", "ticks": 300},
+            f"wait for expanded {self.product_name} smelting line to start",
+        )
+
+    def _fuel_line_to_reserve(
+        self,
+        observation: dict[str, Any],
+        player: dict[str, float],
+        layout: dict[str, Any],
+    ) -> PlannerDecision | None:
+        line_units = _smelting_line_fuel_unit_numbers(observation, self.resource_name)
+        line_units.update(
+            layout[key].get("unit_number")
+            for key in ("drill", "inserter", "furnace")
+            if isinstance(layout.get(key), dict)
+        )
+        for entity_name, layout_key in [
+            ("burner-mining-drill", "drill"),
+            ("burner-inserter", "inserter"),
+            ("stone-furnace", "furnace"),
         ]:
-            entity = layout.get(_entity_key(entity_name))
-            if entity and entity_item_count(entity, item) < threshold:
+            entity = layout.get(layout_key)
+            if entity and entity_item_count(entity, "coal") < 1:
+                return _fuel_burner_line_entity(
+                    observation,
+                    player,
+                    entity,
+                    entity_name=entity_name,
+                    threshold=1,
+                    insert_count=1,
+                    context=f"expanded {self.product_name} smelting operating fuel",
+                    support_skill=self.line_skill.support_skill,
+                    far_fuel_reason=f"expanded {self.product_name} smelting needs fuel logistics before more walking refuels",
+                    exclude_source_units=line_units,
+                )
+
+        for entity_name, layout_key in [
+            ("burner-mining-drill", "drill"),
+            ("burner-inserter", "inserter"),
+            ("stone-furnace", "furnace"),
+        ]:
+            entity = layout.get(layout_key)
+            threshold = SMELTING_LINE_FUEL_RESERVE[layout_key]
+            if entity and entity_item_count(entity, "coal") < threshold:
                 return _fuel_burner_line_entity(
                     observation,
                     player,
                     entity,
                     entity_name=entity_name,
                     threshold=threshold,
-                    insert_count=count,
-                    context=f"expanded {self.product_name} smelting",
+                    insert_count=SMELTING_LINE_FUEL_INSERT[layout_key],
+                    context=f"expanded {self.product_name} smelting reserve",
                     support_skill=self.line_skill.support_skill,
                     far_fuel_reason=f"expanded {self.product_name} smelting needs fuel logistics before more walking refuels",
+                    exclude_source_units=line_units,
                 )
-
-        return PlannerDecision(
-            {"type": "wait", "ticks": 300},
-            f"wait for expanded {self.product_name} smelting line to start",
-        )
+        return None
 
 
 class ExpandIronSmeltingSkill(_ExpandPlateSmeltingSkill):
@@ -2427,6 +2482,40 @@ def _find_unfueled_belt_smelting_line(observation: dict[str, Any], resource_name
     return candidates[0][1]
 
 
+def _find_low_fuel_belt_smelting_line(observation: dict[str, Any], resource_name: str = "iron-ore") -> dict[str, Any] | None:
+    candidates: list[tuple[float, dict[str, Any]]] = []
+    for belt in entities_named(observation, "transport-belt"):
+        for layout in _belt_layouts_from_anchor(observation, belt):
+            if not _layout_matches_resource(layout, resource_name):
+                continue
+            if not all(layout.get(key) is not None for key in ("belt1", "belt2", "inserter", "furnace", "drill")):
+                continue
+            if any(
+                entity_item_count(layout[key], "coal") < SMELTING_LINE_FUEL_RESERVE[key]
+                for key in ("drill", "inserter", "furnace")
+            ):
+                candidates.append((float(belt.get("distance") or 999999), layout))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: item[0])
+    return candidates[0][1]
+
+
+def _smelting_line_fuel_unit_numbers(observation: dict[str, Any], resource_name: str = "iron-ore") -> set[Any]:
+    units: set[Any] = set()
+    for belt in entities_named(observation, "transport-belt"):
+        for layout in _belt_layouts_from_anchor(observation, belt):
+            if not _layout_matches_resource(layout, resource_name):
+                continue
+            if not all(layout.get(key) is not None for key in ("belt1", "belt2", "inserter", "furnace", "drill")):
+                continue
+            for key in ("drill", "inserter", "furnace"):
+                entity = layout.get(key)
+                if isinstance(entity, dict):
+                    units.add(entity.get("unit_number"))
+    return units
+
+
 def _belt_layout_from_anchor(observation: dict[str, Any], belt: dict[str, Any]) -> dict[str, Any]:
     layouts = _belt_layouts_from_anchor(observation, belt)
     return max(layouts, key=lambda item: sum(1 for key in ("belt1", "belt2", "inserter", "furnace", "drill") if item.get(key) is not None))
@@ -2506,12 +2595,15 @@ def _fuel_burner_line_entity(
     context: str,
     support_skill: IronPlateSkill,
     far_fuel_reason: str,
+    exclude_source_units: set[Any] | None = None,
 ) -> PlannerDecision:
     position = _position(entity)
     inventory_coal = inventory_count(observation, "coal")
     if inventory_coal <= 0:
         coal = _nearest_resource_to_position(observation, position, "coal")
-        source = _nearest_surplus_fuel_source(observation, position, exclude_unit=entity.get("unit_number"))
+        excluded_units = set(exclude_source_units or set())
+        excluded_units.add(entity.get("unit_number"))
+        source = _nearest_surplus_fuel_source(observation, position, exclude_units=excluded_units)
         source_surplus = _surplus_fuel_count(source) if source is not None else 0
         if coal is not None and distance(position, _position(coal)) <= WALK_FUEL_LOGISTICS_LIMIT and source_surplus < 8:
             return support_skill._mine_resource(player, coal, "coal", 16)
@@ -2563,11 +2655,15 @@ def _nearest_surplus_fuel_source(
     target_position: dict[str, float],
     *,
     exclude_unit: Any = None,
+    exclude_units: set[Any] | None = None,
 ) -> dict[str, Any] | None:
+    excluded = set(exclude_units or set())
+    if exclude_unit is not None:
+        excluded.add(exclude_unit)
     candidates = []
     for entity_name in ("stone-furnace", "burner-mining-drill", "burner-inserter", "boiler"):
         for entity in entities_named(observation, entity_name):
-            if exclude_unit is not None and entity.get("unit_number") == exclude_unit:
+            if entity.get("unit_number") in excluded:
                 continue
             surplus = _surplus_fuel_count(entity)
             if surplus <= 0:

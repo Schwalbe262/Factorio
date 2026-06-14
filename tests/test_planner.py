@@ -709,7 +709,12 @@ class PlannerTests(unittest.TestCase):
     def test_expand_iron_smelting_done_when_capacity_target_reached(self):
         obs = base_observation()
         obs["inventory"] = {"coal": 12}
-        obs["entities"] = complete_belt_smelting_entities(4, 0, 500) + complete_belt_smelting_entities(14, 0, 600)
+        obs["entities"] = complete_belt_smelting_entities(4, 0, 500, reserve_fuel=True) + complete_belt_smelting_entities(
+            14,
+            0,
+            600,
+            reserve_fuel=True,
+        )
         decision = ExpandIronSmeltingSkill(target_rate_per_minute=37).next_action(obs)
         self.assertTrue(decision.done)
         self.assertIsNone(decision.action)
@@ -725,7 +730,7 @@ class PlannerTests(unittest.TestCase):
     def test_expand_iron_smelting_fuels_complete_line_before_counting_capacity(self):
         obs = base_observation()
         obs["inventory"] = {"coal": 12}
-        obs["entities"] = complete_belt_smelting_entities(4, 0, 500)
+        obs["entities"] = complete_belt_smelting_entities(4, 0, 500, reserve_fuel=True)
         for entity in obs["entities"]:
             if entity["name"] == "burner-inserter":
                 entity["inventories"] = {}
@@ -733,6 +738,35 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["type"], "insert")
         self.assertEqual(decision.action["item"], "coal")
         self.assertEqual(decision.action["name"], "burner-inserter")
+
+    def test_expand_smelting_refuels_low_reserve_before_reporting_capacity_done(self):
+        obs = base_observation()
+        obs["inventory"] = {"coal": 16}
+        obs["entities"] = complete_belt_smelting_entities(
+            8,
+            0,
+            700,
+            resource="copper-ore",
+            product="copper-plate",
+            reserve_fuel=True,
+        )
+        obs["entities"].extend(
+            complete_belt_smelting_entities(
+                18,
+                0,
+                800,
+                resource="copper-ore",
+                product="copper-plate",
+                reserve_fuel=True,
+            )
+        )
+        for entity in obs["entities"]:
+            if entity["name"] == "stone-furnace" and entity["unit_number"] == 704:
+                entity["inventories"]["1"] = {"coal": 1}
+        decision = ExpandCopperSmeltingSkill(target_rate_per_minute=37).next_action(obs)
+        self.assertEqual(decision.action["type"], "insert")
+        self.assertEqual(decision.action["name"], "stone-furnace")
+        self.assertEqual(decision.action["count"], 7)
 
     def test_expand_smelting_uses_remaining_coal_before_mining_more(self):
         obs = base_observation()
@@ -775,6 +809,15 @@ class PlannerTests(unittest.TestCase):
             {"name": "coal", "position": {"x": 300, "y": 0}, "distance": 300},
         ]
         obs["entities"] = complete_belt_smelting_entities(4, 0, 500, resource="copper-ore", product="copper-plate")
+        obs["entities"].append(
+            {
+                "name": "boiler",
+                "unit_number": 900,
+                "position": {"x": 0, "y": 5},
+                "distance": 5,
+                "inventories": {"1": {"coal": 12}},
+            }
+        )
         for entity in obs["entities"]:
             if entity["name"] == "burner-inserter":
                 entity["inventories"] = {}
@@ -783,8 +826,51 @@ class PlannerTests(unittest.TestCase):
         decision = ExpandCopperSmeltingSkill(target_rate_per_minute=18).next_action(obs)
         self.assertEqual(decision.action["type"], "take")
         self.assertEqual(decision.action["item"], "coal")
-        self.assertEqual(decision.action["name"], "stone-furnace")
+        self.assertEqual(decision.action["name"], "boiler")
         self.assertIn("surplus coal", decision.reason)
+
+    def test_expand_smelting_does_not_ping_pong_fuel_inside_same_line(self):
+        obs = base_observation()
+        obs["inventory"] = {"coal": 0}
+        obs["resources"] = [
+            {"name": "copper-ore", "position": {"x": 4, "y": 0}, "distance": 4},
+            {"name": "coal", "position": {"x": 300, "y": 0}, "distance": 300},
+        ]
+        obs["entities"] = complete_belt_smelting_entities(4, 0, 500, resource="copper-ore", product="copper-plate")
+        for entity in obs["entities"]:
+            if entity["name"] == "burner-inserter":
+                entity["inventories"] = {"1": {"coal": 6}}
+            if entity["name"] == "stone-furnace":
+                entity["inventories"] = {"1": {"coal": 1}, "2": {"copper-ore": 1}}
+        decision = ExpandCopperSmeltingSkill(target_rate_per_minute=18).next_action(obs)
+        self.assertIsNone(decision.action)
+        self.assertIn("fuel logistics", decision.reason)
+
+    def test_expand_smelting_does_not_steal_fuel_from_adjacent_smelting_line(self):
+        obs = base_observation()
+        obs["inventory"] = {"coal": 0}
+        obs["resources"] = [
+            {"name": "copper-ore", "position": {"x": 4, "y": 0}, "distance": 4},
+            {"name": "copper-ore", "position": {"x": 4, "y": 3}, "distance": 5},
+            {"name": "coal", "position": {"x": 300, "y": 0}, "distance": 300},
+        ]
+        obs["entities"] = complete_belt_smelting_entities(
+            4,
+            0,
+            500,
+            resource="copper-ore",
+            product="copper-plate",
+            reserve_fuel=True,
+        )
+        obs["entities"].extend(
+            complete_belt_smelting_entities(4, 3, 600, resource="copper-ore", product="copper-plate")
+        )
+        for entity in obs["entities"]:
+            if entity["unit_number"] == 600:
+                entity["inventories"] = {"1": {"coal": 1}}
+        decision = ExpandCopperSmeltingSkill(target_rate_per_minute=18).next_action(obs)
+        self.assertIsNone(decision.action)
+        self.assertIn("fuel logistics", decision.reason)
 
     def test_expand_smelting_mines_walkable_coal_instead_of_tiny_surplus_trips(self):
         obs = base_observation()
@@ -858,8 +944,24 @@ class PlannerTests(unittest.TestCase):
     def test_expand_copper_smelting_done_when_capacity_target_reached(self):
         obs = base_observation()
         obs["inventory"] = {"coal": 12}
-        obs["entities"] = complete_belt_smelting_entities(8, 0, 700, resource="copper-ore", product="copper-plate")
-        obs["entities"].extend(complete_belt_smelting_entities(18, 0, 800, resource="copper-ore", product="copper-plate"))
+        obs["entities"] = complete_belt_smelting_entities(
+            8,
+            0,
+            700,
+            resource="copper-ore",
+            product="copper-plate",
+            reserve_fuel=True,
+        )
+        obs["entities"].extend(
+            complete_belt_smelting_entities(
+                18,
+                0,
+                800,
+                resource="copper-ore",
+                product="copper-plate",
+                reserve_fuel=True,
+            )
+        )
         decision = ExpandCopperSmeltingSkill(target_rate_per_minute=37).next_action(obs)
         self.assertTrue(decision.done)
         self.assertIsNone(decision.action)
@@ -1580,7 +1682,7 @@ class PlannerTests(unittest.TestCase):
             {"name": "iron-ore", "position": {"x": 4, "y": 3}, "distance": 5},
             {"name": "coal", "position": {"x": 0, "y": 2}, "distance": 2},
         ]
-        obs["entities"] = complete_belt_smelting_entities(4, 0, 500)
+        obs["entities"] = complete_belt_smelting_entities(4, 0, 500, reserve_fuel=True)
         decision = ExpandIronSmeltingSkill(target_rate_per_minute=37).next_action(obs)
         self.assertEqual(decision.action["type"], "build")
         self.assertEqual(decision.action["name"], "transport-belt")
@@ -1734,7 +1836,10 @@ def mall_assembler(recipe="transport-belt", inventory=None, powered=True):
     }
 
 
-def complete_belt_smelting_entities(drill_x, drill_y, base_unit, resource="iron-ore", product="iron-plate"):
+def complete_belt_smelting_entities(drill_x, drill_y, base_unit, resource="iron-ore", product="iron-plate", reserve_fuel=False):
+    drill_coal = 8 if reserve_fuel else 3
+    inserter_coal = 4 if reserve_fuel else 2
+    furnace_coal = 8 if reserve_fuel else 3
     return [
         {
             "name": "burner-mining-drill",
@@ -1742,7 +1847,7 @@ def complete_belt_smelting_entities(drill_x, drill_y, base_unit, resource="iron-
             "position": {"x": drill_x, "y": drill_y},
             "distance": 4,
             "mining_target": resource,
-            "inventories": {"1": {"coal": 3}},
+            "inventories": {"1": {"coal": drill_coal}},
         },
         {
             "name": "transport-belt",
@@ -1763,14 +1868,14 @@ def complete_belt_smelting_entities(drill_x, drill_y, base_unit, resource="iron-
             "unit_number": base_unit + 3,
             "position": {"x": drill_x + 4, "y": drill_y},
             "distance": 8,
-            "inventories": {"1": {"coal": 2}},
+            "inventories": {"1": {"coal": inserter_coal}},
         },
         {
             "name": "stone-furnace",
             "unit_number": base_unit + 4,
             "position": {"x": drill_x + 5, "y": drill_y},
             "distance": 9,
-            "inventories": {"2": {resource: 1}, "1": {"coal": 3}, "3": {product: 1}},
+            "inventories": {"2": {resource: 1}, "1": {"coal": furnace_coal}, "3": {product: 1}},
         },
     ]
 
