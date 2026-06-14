@@ -19,6 +19,7 @@ ALLOWED_ACTION_TYPES = {
     "move_to",
     "print",
     "research",
+    "restore_character_controller",
     "set_recipe",
     "set_walking_state",
     "stop",
@@ -1063,6 +1064,27 @@ local function action_stop()
   if player and player.character and player.character.valid then player.walking_state = { walking = false, direction = defines.direction.north } end
   return ok({ action = "stop", status = "stopped", position = position_table(agent.position) })
 end
+local function action_restore_character_controller()
+  local player = action_player()
+  if not player or not player.valid then return err("connected player not found") end
+  if not player.character or not player.character.valid then return err("connected player character not found") end
+  local restored = false
+  if player.controller_type ~= defines.controllers.character then
+    local ok_restore = pcall(function()
+      player.set_controller({ type = defines.controllers.character, character = player.character })
+    end)
+    if not ok_restore then return err("restore character controller failed") end
+    restored = true
+  end
+  player.walking_state = { walking = false, direction = defines.direction.north }
+  return ok({
+    action = "restore_character_controller",
+    restored = restored,
+    controller_type = player.controller_type,
+    controller_is_character = player_controller_is_character(player),
+    position = position_table(player_actual_position(player))
+  })
+end
 local function action_mine()
   local target = nil
   if action.target == "resource" or action.resource then target = find_resource(agent.surface, action) else target = find_entity(agent.surface, action) end
@@ -1267,6 +1289,8 @@ elseif action.type == "move_to" then
   reply_action(action_move_to())
 elseif action.type == "stop" then
   reply_action(action_stop())
+elseif action.type == "restore_character_controller" then
+  reply_action(action_restore_character_controller())
 elseif action.type == "mine" then
   reply_action(action_mine())
 elseif action.type == "craft" then

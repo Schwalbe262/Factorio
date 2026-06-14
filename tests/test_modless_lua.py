@@ -60,6 +60,13 @@ class ModlessLuaTests(unittest.TestCase):
         self.assertIn("RCON Lua walking_state moves only one tick", command)
         self.assertIn("use GUI input movement executor", command)
 
+    def test_restore_character_controller_action_is_allowlisted(self):
+        command = build_modless_action_command({"type": "restore_character_controller"})
+
+        self.assertIn("action_restore_character_controller", command)
+        self.assertIn("player.set_controller", command)
+        self.assertIn("defines.controllers.character", command)
+
     def test_chart_action_is_allowlisted(self):
         command = build_modless_action_command({"type": "chart", "radius": 64})
         self.assertIn("agent.force.chart", command)

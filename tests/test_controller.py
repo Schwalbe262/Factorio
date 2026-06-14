@@ -391,6 +391,10 @@ class ControllerTests(unittest.TestCase):
         self.assertIn("has no valid character", response["reason"])
 
     def test_no_mod_action_strict_real_player_rejects_remote_controller(self):
+        class FakeModless:
+            def act(self, action, player_name=None):
+                return {"ok": False, "reason": "restore failed in test"}
+
         class FakeController(ModlessFactorioController):
             def observe(self):
                 return {
@@ -413,11 +417,81 @@ class ControllerTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temp_dir:
             controller = FakeController(make_test_config(Path(temp_dir)))
+            controller._modless = FakeModless()
             with patch.dict("os.environ", {"FACTORIO_AI_REQUIRE_REAL_PLAYER": "1"}):
                 response = controller.act({"type": "wait", "ticks": 1})
 
         self.assertFalse(response["ok"])
         self.assertIn("not in character controller mode", response["reason"])
+        self.assertIn("restore_character_controller failed", response["reason"])
+
+    def test_no_mod_action_strict_real_player_restores_remote_controller_before_action(self):
+        remote_observation = {
+            "ok": True,
+            "tick": 1,
+            "player": {
+                "name": "r1jae",
+                "kind": "player",
+                "position": {"x": 0.0, "y": 0.0},
+                "character_valid": True,
+                "controller_is_character": False,
+            },
+            "execution": {
+                "mode": "player",
+                "virtual": False,
+                "character_valid": True,
+                "controller_is_character": False,
+            },
+            "enemies": [],
+        }
+        character_observation = {
+            "ok": True,
+            "tick": 2,
+            "player": {
+                "name": "r1jae",
+                "kind": "player",
+                "position": {"x": 0.0, "y": 0.0},
+                "character_valid": True,
+                "controller_is_character": True,
+            },
+            "execution": {
+                "mode": "player",
+                "virtual": False,
+                "character_valid": True,
+                "controller_is_character": True,
+            },
+            "enemies": [],
+        }
+
+        class FakeModless:
+            def __init__(self):
+                self.actions = []
+
+            def act(self, action, player_name=None):
+                self.actions.append((action, player_name))
+                return {"ok": True, "action": action.get("type")}
+
+        class FakeController(ModlessFactorioController):
+            def __init__(self, cfg):
+                super().__init__(cfg)
+                self.observations = [remote_observation, character_observation]
+
+            def observe(self):
+                if self.observations:
+                    return self.observations.pop(0)
+                return character_observation
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = FakeController(make_test_config(Path(temp_dir)))
+            fake_modless = FakeModless()
+            controller._modless = fake_modless
+            with patch.dict("os.environ", {"FACTORIO_AI_REQUIRE_REAL_PLAYER": "1"}):
+                response = controller.act({"type": "wait", "ticks": 1})
+
+        self.assertTrue(response["ok"])
+        self.assertEqual(response["action"], "wait")
+        self.assertEqual(fake_modless.actions[0][0]["type"], "restore_character_controller")
+        self.assertEqual(fake_modless.actions[1][0]["type"], "wait")
 
     def test_no_mod_action_strict_real_player_pauses_near_enemy(self):
         class FakeController(ModlessFactorioController):

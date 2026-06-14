@@ -191,7 +191,9 @@ Strict real-player execution refuses to act when the selected player has no vali
 in character controller mode, or when observed enemies are too close to the player, the action
 target, or the planned movement segment. The default stop radii can be tuned with
 `FACTORIO_AI_REAL_PLAYER_ENEMY_STOP_RADIUS`, `FACTORIO_AI_REAL_PLAYER_ENEMY_TARGET_RADIUS`, and
-`FACTORIO_AI_REAL_PLAYER_ENEMY_PATH_RADIUS`.
+`FACTORIO_AI_REAL_PLAYER_ENEMY_PATH_RADIUS`. If the selected real player is in Factorio remote/map
+controller mode but still has a valid character, the controller first runs the allowlisted
+`restore_character_controller` action and then re-observes before executing the requested action.
 
 Create the save and start the LAN/RCON server:
 

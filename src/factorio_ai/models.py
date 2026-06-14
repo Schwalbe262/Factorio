@@ -14,6 +14,7 @@ ALLOWED_ACTION_TYPES = {
     "set_recipe",
     "connect_power",
     "research",
+    "restore_character_controller",
     "stop",
     "wait",
 }
@@ -62,6 +63,8 @@ def validate_action(action: dict[str, Any]) -> dict[str, Any]:
             raise ActionValidationError("connect_power requires position or unit_number")
     elif action_type == "research":
         _require_string(action, "technology")
+    elif action_type == "restore_character_controller":
+        pass
     elif action_type == "stop":
         pass
     elif action_type == "wait":

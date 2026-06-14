@@ -1533,6 +1533,21 @@ class ModlessFactorioController(FactorioController):
     ) -> StrategyStepSummary:
         if _real_player_execution_required():
             observation = self.observe()
+            observation, recovery_problem = self._maybe_restore_real_player_controller(observation)
+            if recovery_problem:
+                return StrategyStepSummary(
+                    ok=False,
+                    reason=recovery_problem,
+                    objective=objective,
+                    selected_skill="",
+                    strategy={
+                        "selected_skill": "",
+                        "source": "execution_guard",
+                        "reason": recovery_problem,
+                        "player": observation.get("player"),
+                        "execution": observation.get("execution"),
+                    },
+                )
             problem = _real_player_execution_problem(observation)
             if problem:
                 return StrategyStepSummary(
@@ -1565,6 +1580,15 @@ class ModlessFactorioController(FactorioController):
         validate_action(action)
         if _real_player_execution_required():
             observation = self.observe()
+            observation, recovery_problem = self._maybe_restore_real_player_controller(observation)
+            if recovery_problem:
+                return {
+                    "ok": False,
+                    "reason": recovery_problem,
+                    "mode": "modless-rcon-lua",
+                    "player": observation.get("player"),
+                    "execution": observation.get("execution"),
+                }
             problem = _real_player_execution_problem(observation)
             if problem:
                 return {
@@ -1586,6 +1610,22 @@ class ModlessFactorioController(FactorioController):
             if action.get("type") == "move_to" and _gui_input_movement_enabled():
                 return self._act_gui_move_to(action, observation)
         return self._modless.act(self._agent_action(action), player_name=self._configured_agent_player_name())
+
+    def _maybe_restore_real_player_controller(self, observation: dict[str, Any]) -> tuple[dict[str, Any], str]:
+        if not _real_player_controller_restore_needed(observation):
+            return observation, ""
+        restore = self._modless.act(
+            {"type": "restore_character_controller"},
+            player_name=self._configured_agent_player_name(),
+        )
+        if not restore.get("ok"):
+            problem = _real_player_execution_problem(observation)
+            return observation, f"{problem}; restore_character_controller failed: {restore.get('reason')}"
+        refreshed = self.observe()
+        if _real_player_controller_restore_needed(refreshed):
+            problem = _real_player_execution_problem(refreshed)
+            return refreshed, f"{problem}; restore_character_controller did not restore character controller"
+        return refreshed, ""
 
     def _act_gui_move_to(self, action: dict[str, Any], observation: dict[str, Any]) -> dict[str, Any]:
         target = action.get("position")
@@ -1747,6 +1787,17 @@ def _real_player_execution_problem(observation: dict[str, Any]) -> str:
         name = str(player.get("name") or execution.get("agent_name") or "unknown")
         return f"real player execution required, but player {name} is not in character controller mode"
     return ""
+
+
+def _real_player_controller_restore_needed(observation: dict[str, Any]) -> bool:
+    execution = observation.get("execution") if isinstance(observation.get("execution"), dict) else {}
+    player = observation.get("player") if isinstance(observation.get("player"), dict) else {}
+    mode = str(execution.get("mode") or "").strip().lower()
+    kind = str(player.get("kind") or execution.get("agent_kind") or "").strip().lower()
+    character_valid = bool(player.get("character_valid") or execution.get("character_valid"))
+    if mode == "virtual" or kind == "server" or execution.get("virtual") or not character_valid:
+        return False
+    return player.get("controller_is_character") is False or execution.get("controller_is_character") is False
 
 
 def _action_target_position(action: dict[str, Any]) -> dict[str, float] | None:

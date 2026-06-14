@@ -92,8 +92,11 @@ stops instead of falling back to the virtual server agent. The `auto`,
 player"; they must not fall through to the virtual server agent.
 
 Strict real-player execution must pause if the player has no valid character,
-is in remote/god/spectator controller mode, or if enemies are close to the
-player, action target, or movement segment. Tune the current guard with
+is in non-character controller mode after recovery, or if enemies are close to
+the player, action target, or movement segment. If a connected real player has
+a valid character but is in Factorio remote/map controller mode, the controller
+first runs the allowlisted `restore_character_controller` action and re-observes.
+Tune the current guard with
 `FACTORIO_AI_REAL_PLAYER_ENEMY_STOP_RADIUS`,
 `FACTORIO_AI_REAL_PLAYER_ENEMY_TARGET_RADIUS`, and
 `FACTORIO_AI_REAL_PLAYER_ENEMY_PATH_RADIUS`.
