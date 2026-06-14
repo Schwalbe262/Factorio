@@ -85,8 +85,18 @@ AI player is not connected. That is acceptable for fast iteration, but not for
 GUI/real-play validation. For real-player validation set
 `FACTORIO_AI_AGENT_PLAYER=auto` and `FACTORIO_AI_REQUIRE_REAL_PLAYER=1`, or run
 `run_factorio_no_mod_real_player_llm_autopilot.bat`. In that mode the
-controller uses the first connected GUI player and stops instead of falling
-back to the virtual server agent.
+controller uses the first connected GUI player, sets
+`FACTORIO_AI_USE_GUI_INPUT_FOR_MOVEMENT=1`, sends WASD input for `move_to`, and
+stops instead of falling back to the virtual server agent. The `auto`,
+`connected`, `first-connected`, and `*` player names mean "first connected GUI
+player"; they must not fall through to the virtual server agent.
+
+Strict real-player execution must pause if the player has no valid character,
+is in remote/god/spectator controller mode, or if enemies are close to the
+player, action target, or movement segment. Tune the current guard with
+`FACTORIO_AI_REAL_PLAYER_ENEMY_STOP_RADIUS`,
+`FACTORIO_AI_REAL_PLAYER_ENEMY_TARGET_RADIUS`, and
+`FACTORIO_AI_REAL_PLAYER_ENEMY_PATH_RADIUS`.
 
 ## Slurm LLM Workers
 

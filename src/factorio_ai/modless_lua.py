@@ -338,22 +338,40 @@ local function ensure_server_agent()
   surface = game.get_surface(agent.surface_name or "nauvis") or surface
   return {{ kind = "server", name = "server", player = nil, surface = surface, force = game.forces.player, position = agent.position, inventory = agent.inventory, character_valid = false, move = {{ active = false }} }}
 end
+local function player_move_state(player)
+  if not player or not player.character or not player.character.valid then return {{ active = false }} end
+  local state = player.walking_state
+  if type(state) ~= "table" then return {{ active = false }} end
+  return {{ active = state.walking == true, direction = state.direction }}
+end
+local function player_actual_position(player)
+  if player and player.character and player.character.valid then return player.character.position end
+  return player.position
+end
+local function player_controller_is_character(player)
+  return player and player.controller_type == defines.controllers.character
+end
+local function auto_select_player_name(player_name)
+  if type(player_name) ~= "string" or player_name == "" then return true end
+  local normalized = string.lower(player_name)
+  return normalized == "auto" or normalized == "connected" or normalized == "first-connected" or normalized == "*"
+end
 local function find_agent(player_name)
-  if type(player_name) == "string" and player_name ~= "" then
+  if not auto_select_player_name(player_name) then
     local named = game.get_player(player_name)
     if named and named.valid then
-      return {{ kind = "player", name = named.name, player = named, surface = named.surface, force = named.force, position = named.position, inventory = named.get_main_inventory(), character_valid = named.character ~= nil and named.character.valid or false }}
+      return {{ kind = "player", name = named.name, player = named, surface = named.surface, force = named.force, position = player_actual_position(named), inventory = named.get_main_inventory(), character_valid = named.character ~= nil and named.character.valid or false, move = player_move_state(named), controller_type = named.controller_type, controller_is_character = player_controller_is_character(named) }}
     end
     return ensure_server_agent()
   end
   for _, player in pairs(game.connected_players) do
     if player and player.valid then
-      return {{ kind = "player", name = player.name, player = player, surface = player.surface, force = player.force, position = player.position, inventory = player.get_main_inventory(), character_valid = player.character ~= nil and player.character.valid or false }}
+      return {{ kind = "player", name = player.name, player = player, surface = player.surface, force = player.force, position = player_actual_position(player), inventory = player.get_main_inventory(), character_valid = player.character ~= nil and player.character.valid or false, move = player_move_state(player), controller_type = player.controller_type, controller_is_character = player_controller_is_character(player) }}
     end
   end
   for _, player in pairs(game.players) do
     if player and player.valid and player.character and player.character.valid then
-      return {{ kind = "player", name = player.name, player = player, surface = player.surface, force = player.force, position = player.position, inventory = player.get_main_inventory(), character_valid = true }}
+      return {{ kind = "player", name = player.name, player = player, surface = player.surface, force = player.force, position = player_actual_position(player), inventory = player.get_main_inventory(), character_valid = true, move = player_move_state(player), controller_type = player.controller_type, controller_is_character = player_controller_is_character(player) }}
     end
   end
   return ensure_server_agent()
@@ -836,8 +854,8 @@ json_reply({
   ok = true,
   mode = "modless-rcon-lua",
   tick = game.tick,
-  player = { name = agent.name, kind = agent.kind, position = position_table(origin), surface = surface.name, character_valid = agent.character_valid, move = agent.move or { active = false } },
-  execution = { mode = agent.kind == "server" and "virtual" or "player", agent_kind = agent.kind, agent_name = agent.name, character_valid = agent.character_valid, virtual = agent.kind == "server" },
+  player = { name = agent.name, kind = agent.kind, position = position_table(origin), surface = surface.name, character_valid = agent.character_valid, move = agent.move or { active = false }, controller_type = agent.controller_type, controller_is_character = agent.controller_is_character },
+  execution = { mode = agent.kind == "server" and "virtual" or "player", agent_kind = agent.kind, agent_name = agent.name, character_valid = agent.character_valid, virtual = agent.kind == "server", controller_type = agent.controller_type, controller_is_character = agent.controller_is_character },
   base = { anchor_position = position_table(base_anchor), spawn_position = position_table(base_anchor) },
   inventory = inventory_contents(agent.inventory),
   agent_marker = agent_marker_snapshot(agent),
@@ -1037,15 +1055,12 @@ local function action_move_to()
   end
   local player = action_player()
   if not player or not player.character or not player.character.valid then return err("connected player character not found") end
-  local dx = position.x - player.position.x
-  local dy = position.y - player.position.y
-  player.character.walking_state = { walking = true, direction = walking_direction(dx, dy) }
-  return ok({ action = "move_to", status = "moving", position = position_table(player.position), target = position_table(position), distance = round(distance(player.position, position)) })
+  return err("RCON Lua walking_state moves only one tick; use GUI input movement executor for real-player move_to", { action = "move_to", position = position_table(player.position), target = position_table(position), distance = round(distance(player.position, position)) })
 end
 local function action_stop()
   if agent.kind == "server" then return ok({ action = "stop", status = "stopped", position = position_table(agent.position) }) end
   local player = action_player()
-  if player and player.character and player.character.valid then player.character.walking_state = { walking = false, direction = defines.direction.north } end
+  if player and player.character and player.character.valid then player.walking_state = { walking = false, direction = defines.direction.north } end
   return ok({ action = "stop", status = "stopped", position = position_table(agent.position) })
 end
 local function action_mine()
@@ -1238,15 +1253,14 @@ elseif action.type == "set_walking_state" then
   if not player or not player.character or not player.character.valid then
     reply_action(err("connected player character not found"))
   else
-    player.character.walking_state = { walking = action.walking ~= false, direction = directions[action.direction or "north"] or defines.direction.north }
-    reply_action(ok({ action = "set_walking_state", direction = action.direction or "north", walking = action.walking ~= false }))
+    reply_action(err("RCON walking_state is disabled for real-player movement; use GUI input movement executor", { action = "set_walking_state", direction = action.direction or "north" }))
   end
 elseif action.type == "stop_walking" then
   local player = action_player()
   if not player or not player.character or not player.character.valid then
     reply_action(err("connected player character not found"))
   else
-    player.character.walking_state = { walking = false, direction = defines.direction.north }
+    player.walking_state = { walking = false, direction = defines.direction.north }
     reply_action(ok({ action = "stop_walking" }))
   end
 elseif action.type == "move_to" then

@@ -163,9 +163,11 @@ Factorio/Space Age content matches.
 Slurm LLM strategy required. It fails instead of silently falling back to heuristics when the
 active 4B worker is not ready.
 `run_factorio_no_mod_real_player_llm_autopilot.bat` opens a GUI client, sets
-`FACTORIO_AI_AGENT_PLAYER=auto`, and sets `FACTORIO_AI_REQUIRE_REAL_PLAYER=1`. In that mode the
-autopilot uses the first connected GUI player and stops if it would otherwise fall back to the
-virtual server agent.
+`FACTORIO_AI_AGENT_PLAYER=auto`, `FACTORIO_AI_REQUIRE_REAL_PLAYER=1`, and
+`FACTORIO_AI_USE_GUI_INPUT_FOR_MOVEMENT=1`. In that mode the autopilot uses the first connected GUI
+player, sends WASD input for `move_to`, and stops if it would otherwise fall back to the virtual
+server agent. The `auto`, `connected`, `first-connected`, and `*` player names are aliases for the
+first connected GUI player, not literal Factorio player names.
 
 The older modded development server is still launched internally with `--start-server` plus GUI
 `--mp-connect`, but it is configured for one local review client by default. Use it for fast skill
@@ -180,8 +182,16 @@ Lua for observation and allowlisted player/server actions.
 By default, no-mod headless tests may use a virtual server-side agent when the configured
 `FACTORIO_AI_AGENT_PLAYER` is not connected. For GUI/real-player validation, set
 `FACTORIO_AI_AGENT_PLAYER=auto` and `FACTORIO_AI_REQUIRE_REAL_PLAYER=1`, or run
-`run_factorio_no_mod_real_player_llm_autopilot.bat`. The dashboard shows the current execution mode
-as `player` or `virtual` in the AI Activity panel.
+`run_factorio_no_mod_real_player_llm_autopilot.bat`. Set
+`FACTORIO_AI_USE_GUI_INPUT_FOR_MOVEMENT=1` when real-player `move_to` should be executed through GUI
+WASD input. The dashboard shows the current execution mode as `player` or `virtual` in the AI
+Activity panel.
+
+Strict real-player execution refuses to act when the selected player has no valid character, is not
+in character controller mode, or when observed enemies are too close to the player, the action
+target, or the planned movement segment. The default stop radii can be tuned with
+`FACTORIO_AI_REAL_PLAYER_ENEMY_STOP_RADIUS`, `FACTORIO_AI_REAL_PLAYER_ENEMY_TARGET_RADIUS`, and
+`FACTORIO_AI_REAL_PLAYER_ENEMY_PATH_RADIUS`.
 
 Create the save and start the LAN/RCON server:
 

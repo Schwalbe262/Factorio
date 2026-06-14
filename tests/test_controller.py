@@ -371,6 +371,127 @@ class ControllerTests(unittest.TestCase):
         self.assertFalse(response["ok"])
         self.assertIn("virtual server agent", response["reason"])
 
+    def test_no_mod_action_strict_real_player_rejects_dead_character(self):
+        class FakeController(ModlessFactorioController):
+            def observe(self):
+                return {
+                    "ok": True,
+                    "tick": 1,
+                    "player": {"name": "r1jae", "kind": "player", "character_valid": False},
+                    "execution": {"mode": "player", "virtual": False, "character_valid": False},
+                    "enemies": [],
+                }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = FakeController(make_test_config(Path(temp_dir)))
+            with patch.dict("os.environ", {"FACTORIO_AI_REQUIRE_REAL_PLAYER": "1"}):
+                response = controller.act({"type": "wait", "ticks": 1})
+
+        self.assertFalse(response["ok"])
+        self.assertIn("has no valid character", response["reason"])
+
+    def test_no_mod_action_strict_real_player_rejects_remote_controller(self):
+        class FakeController(ModlessFactorioController):
+            def observe(self):
+                return {
+                    "ok": True,
+                    "tick": 1,
+                    "player": {
+                        "name": "r1jae",
+                        "kind": "player",
+                        "character_valid": True,
+                        "controller_is_character": False,
+                    },
+                    "execution": {
+                        "mode": "player",
+                        "virtual": False,
+                        "character_valid": True,
+                        "controller_is_character": False,
+                    },
+                    "enemies": [],
+                }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = FakeController(make_test_config(Path(temp_dir)))
+            with patch.dict("os.environ", {"FACTORIO_AI_REQUIRE_REAL_PLAYER": "1"}):
+                response = controller.act({"type": "wait", "ticks": 1})
+
+        self.assertFalse(response["ok"])
+        self.assertIn("not in character controller mode", response["reason"])
+
+    def test_no_mod_action_strict_real_player_pauses_near_enemy(self):
+        class FakeController(ModlessFactorioController):
+            def observe(self):
+                return {
+                    "ok": True,
+                    "tick": 1,
+                    "player": {
+                        "name": "r1jae",
+                        "kind": "player",
+                        "position": {"x": 0.0, "y": 0.0},
+                        "character_valid": True,
+                        "controller_is_character": True,
+                    },
+                    "execution": {
+                        "mode": "player",
+                        "virtual": False,
+                        "character_valid": True,
+                        "controller_is_character": True,
+                    },
+                    "enemies": [
+                        {
+                            "name": "small-biter",
+                            "type": "unit",
+                            "position": {"x": 12.0, "y": 0.0},
+                        }
+                    ],
+                }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = FakeController(make_test_config(Path(temp_dir)))
+            with patch.dict("os.environ", {"FACTORIO_AI_REQUIRE_REAL_PLAYER": "1"}):
+                response = controller.act({"type": "wait", "ticks": 1})
+
+        self.assertFalse(response["ok"])
+        self.assertIn("enemy small-biter", response["reason"])
+        self.assertIn("near player", response["reason"])
+
+    def test_no_mod_action_strict_real_player_pauses_path_near_enemy(self):
+        class FakeController(ModlessFactorioController):
+            def observe(self):
+                return {
+                    "ok": True,
+                    "tick": 1,
+                    "player": {
+                        "name": "r1jae",
+                        "kind": "player",
+                        "position": {"x": 0.0, "y": 0.0},
+                        "character_valid": True,
+                        "controller_is_character": True,
+                    },
+                    "execution": {
+                        "mode": "player",
+                        "virtual": False,
+                        "character_valid": True,
+                        "controller_is_character": True,
+                    },
+                    "enemies": [
+                        {
+                            "name": "biter-spawner",
+                            "type": "unit-spawner",
+                            "position": {"x": 40.0, "y": 8.0},
+                        }
+                    ],
+                }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = FakeController(make_test_config(Path(temp_dir)))
+            with patch.dict("os.environ", {"FACTORIO_AI_REQUIRE_REAL_PLAYER": "1"}):
+                response = controller.act({"type": "move_to", "position": {"x": 80.0, "y": 0.0}})
+
+        self.assertFalse(response["ok"])
+        self.assertIn("near movement path", response["reason"])
+
     def test_auto_agent_player_name_uses_first_connected_player(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             cfg = replace(make_test_config(Path(temp_dir)), agent_player_name="auto")
@@ -378,6 +499,99 @@ class ControllerTests(unittest.TestCase):
 
         self.assertEqual(controller._agent_parameter(), {})
         self.assertNotIn("player_name", controller._agent_action({"type": "wait", "ticks": 1}))
+
+    def test_wait_for_move_refreshes_direction_until_arrival(self):
+        class MovingController(FactorioController):
+            def __init__(self, cfg):
+                super().__init__(cfg)
+                self.positions = [
+                    {"x": 0.0, "y": 0.0},
+                    {"x": 0.25, "y": 0.0},
+                    {"x": 1.0, "y": 0.0},
+                ]
+                self.actions = []
+                self.stopped = False
+
+            def observe(self):
+                position = self.positions.pop(0) if self.positions else {"x": 1.0, "y": 0.0}
+                return {
+                    "player": {
+                        "name": "r1jae",
+                        "kind": "player",
+                        "position": position,
+                        "character_valid": True,
+                        "move": {"active": True},
+                    }
+                }
+
+            def act(self, action):
+                self.actions.append(action)
+                return {"ok": True, "action": action.get("type")}
+
+            def stop_agent(self):
+                self.stopped = True
+                return {"ok": True, "action": "stop"}
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = MovingController(make_test_config(Path(temp_dir)))
+            with patch("factorio_ai.controller.time.sleep", return_value=None):
+                arrived, reason = controller._wait_for_move(
+                    {"type": "move_to", "position": {"x": 1.0, "y": 0.0}, "tolerance": 0.1}
+                )
+
+        self.assertTrue(arrived, reason)
+        self.assertTrue(controller.stopped)
+        self.assertTrue(any(action["type"] == "move_to" for action in controller.actions))
+
+    def test_no_mod_move_to_can_use_gui_keyboard_executor(self):
+        class FakeController(ModlessFactorioController):
+            def observe(self):
+                return {
+                    "ok": True,
+                    "player": {
+                        "name": "r1jae",
+                        "kind": "player",
+                        "position": {"x": 0.0, "y": 0.0},
+                        "character_valid": True,
+                    },
+                    "execution": {"mode": "player", "virtual": False, "character_valid": True},
+                }
+
+        class FakeDriver:
+            def __init__(self, cfg):
+                self.cfg = cfg
+                self.held = []
+                self.clicks = []
+
+            def activate_factorio(self, timeout_seconds=30.0):
+                return True
+
+            def click_window_ratio(self, x_ratio, y_ratio):
+                self.clicks.append((x_ratio, y_ratio))
+
+            def hold_keys(self, keys, duration_seconds):
+                self.held.append((list(keys), duration_seconds))
+
+        fake_driver = FakeDriver(None)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = FakeController(make_test_config(Path(temp_dir)))
+            with (
+                patch.dict(
+                    "os.environ",
+                    {
+                        "FACTORIO_AI_REQUIRE_REAL_PLAYER": "1",
+                        "FACTORIO_AI_USE_GUI_INPUT_FOR_MOVEMENT": "1",
+                    },
+                ),
+                patch("factorio_ai.vanilla_gui.VanillaGuiDriver", return_value=fake_driver),
+            ):
+                response = controller.act({"type": "move_to", "position": {"x": 1.0, "y": 0.0}})
+
+        self.assertTrue(response["ok"])
+        self.assertEqual(response["mode"], "gui-input")
+        self.assertEqual(response["keys"], ["d"])
+        self.assertEqual(fake_driver.clicks, [(0.5, 0.5)])
+        self.assertEqual(fake_driver.held[0][0], ["d"])
 
     def test_autopilot_pulses_layout_work_while_codex_wait_state_is_active(self):
         observation = {

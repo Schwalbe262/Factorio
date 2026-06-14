@@ -1386,8 +1386,11 @@ class FactorioController:
         initial_distance = distance(start_position, target)
         tolerance = float(action.get("tolerance") or 0.75)
         timeout_seconds = min(240.0, max(20.0, initial_distance * 3.0 + 10.0))
+        stall_timeout_seconds = float(action.get("stall_timeout_seconds") or 8.0)
         deadline = time.monotonic() + timeout_seconds
         last_distance = initial_distance
+        best_distance = initial_distance
+        last_progress_at = time.monotonic()
 
         while time.monotonic() < deadline:
             if self._review_lock_active():
@@ -1399,14 +1402,23 @@ class FactorioController:
             current_distance = distance(current_position, target)
             last_distance = current_distance
             if current_distance <= tolerance:
+                self.stop_agent()
                 return True, f"arrived at move target within {current_distance:.2f} tiles"
 
-            player = observation.get("player") if isinstance(observation.get("player"), dict) else {}
-            move = player.get("move") if isinstance(player.get("move"), dict) else {}
-            if move and move.get("active") is False and current_distance > tolerance:
-                return False, f"move stopped before target; remaining distance {current_distance:.2f}"
+            if current_distance < best_distance - 0.15:
+                best_distance = current_distance
+                last_progress_at = time.monotonic()
+            elif time.monotonic() - last_progress_at > stall_timeout_seconds:
+                self.stop_agent()
+                return False, f"move made no progress; remaining distance {current_distance:.2f}"
+
+            refresh = self.act(action)
+            if not refresh.get("ok"):
+                self.stop_agent()
+                return False, f"move refresh failed: {refresh.get('reason')}"
             time.sleep(0.5)
 
+        self.stop_agent()
         return False, f"move_to timed out; remaining distance {last_distance:.2f}"
 
     def _review_lock_active(self) -> bool:
@@ -1562,7 +1574,73 @@ class ModlessFactorioController(FactorioController):
                     "player": observation.get("player"),
                     "execution": observation.get("execution"),
                 }
+            threat = _real_player_enemy_action_threat(observation, action)
+            if threat:
+                return {
+                    "ok": False,
+                    "reason": threat,
+                    "mode": "modless-rcon-lua",
+                    "player": observation.get("player"),
+                    "execution": observation.get("execution"),
+                }
+            if action.get("type") == "move_to" and _gui_input_movement_enabled():
+                return self._act_gui_move_to(action, observation)
         return self._modless.act(self._agent_action(action), player_name=self._configured_agent_player_name())
+
+    def _act_gui_move_to(self, action: dict[str, Any], observation: dict[str, Any]) -> dict[str, Any]:
+        target = action.get("position")
+        if not isinstance(target, dict):
+            return {"ok": False, "reason": "move_to requires numeric position", "mode": "gui-input"}
+        current = player_position(observation)
+        player = observation.get("player") if isinstance(observation.get("player"), dict) else {}
+        if player.get("controller_is_character") is False:
+            return {
+                "ok": False,
+                "reason": "GUI movement requires the player to be in character controller mode; close map/remote view first",
+                "mode": "gui-input",
+                "player": player,
+            }
+        target_position = {"x": float(target.get("x") or 0.0), "y": float(target.get("y") or 0.0)}
+        remaining = distance(current, target_position)
+        tolerance = float(action.get("tolerance") or 0.75)
+        if remaining <= tolerance:
+            return {
+                "ok": True,
+                "action": "move_to",
+                "status": "arrived",
+                "mode": "gui-input",
+                "position": current,
+                "target": target_position,
+                "distance": round(remaining, 3),
+            }
+        keys = _movement_keys(current, target_position)
+        if not keys:
+            return {"ok": False, "reason": "move_to could not derive movement keys", "mode": "gui-input"}
+        duration = float(action.get("duration_seconds") or min(0.35, max(0.08, remaining / 8.0)))
+        try:
+            from .vanilla_gui import VanillaGuiDriver
+
+            driver = VanillaGuiDriver(self.cfg)
+            if not driver.activate_factorio(timeout_seconds=2.0):
+                return {"ok": False, "reason": "Factorio GUI window was not found for movement", "mode": "gui-input"}
+            driver.click_window_ratio(0.5, 0.5)
+            time.sleep(0.05)
+            driver.hold_keys(keys, duration)
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "reason": f"GUI movement failed: {type(exc).__name__}: {exc}", "mode": "gui-input"}
+        return {
+            "ok": True,
+            "action": "move_to",
+            "status": "moving",
+            "mode": "gui-input",
+            "keys": keys,
+            "duration_seconds": round(duration, 3),
+            "position": current,
+            "target": target_position,
+            "distance": round(remaining, 3),
+            "agent": {"name": player.get("name"), "kind": player.get("kind"), "character_valid": player.get("character_valid")},
+            "execution": {"mode": "player", "input": "gui-keyboard", "virtual": False},
+        }
 
     def wait(self, ticks: int) -> dict[str, Any]:
         response = self.act({"type": "wait", "ticks": ticks})
@@ -1581,6 +1659,76 @@ def _real_player_execution_required() -> bool:
     return os.getenv("FACTORIO_AI_REQUIRE_REAL_PLAYER", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _gui_input_movement_enabled() -> bool:
+    return os.getenv("FACTORIO_AI_USE_GUI_INPUT_FOR_MOVEMENT", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _movement_keys(current: dict[str, float], target: dict[str, float]) -> list[str]:
+    dx = float(target.get("x") or 0.0) - float(current.get("x") or 0.0)
+    dy = float(target.get("y") or 0.0) - float(current.get("y") or 0.0)
+    keys: list[str] = []
+    if dy < -0.2:
+        keys.append("w")
+    elif dy > 0.2:
+        keys.append("s")
+    if dx < -0.2:
+        keys.append("a")
+    elif dx > 0.2:
+        keys.append("d")
+    return keys
+
+
+def _real_player_enemy_action_threat(observation: dict[str, Any], action: dict[str, Any]) -> str:
+    if action.get("type") == "stop":
+        return ""
+    enemies = observation.get("enemies")
+    if not isinstance(enemies, list):
+        return ""
+    enemy_positions: list[tuple[dict[str, Any], dict[str, float]]] = []
+    for enemy in enemies:
+        if not isinstance(enemy, dict):
+            continue
+        position = _position_or_none(enemy.get("position"))
+        if position is not None:
+            enemy_positions.append((enemy, position))
+    if not enemy_positions:
+        return ""
+
+    current = player_position(observation)
+    stop_radius = _float_env("FACTORIO_AI_REAL_PLAYER_ENEMY_STOP_RADIUS", 24.0)
+    target_radius = _float_env("FACTORIO_AI_REAL_PLAYER_ENEMY_TARGET_RADIUS", 32.0)
+    path_radius = _float_env("FACTORIO_AI_REAL_PLAYER_ENEMY_PATH_RADIUS", 20.0)
+
+    nearest_current = min(
+        ((distance(current, enemy_position), enemy) for enemy, enemy_position in enemy_positions),
+        key=lambda item: item[0],
+    )
+    if nearest_current[0] <= stop_radius:
+        return _enemy_threat_reason("near player", nearest_current[1], nearest_current[0], stop_radius)
+
+    target = _action_target_position(action)
+    if target is None:
+        return ""
+    nearest_target = min(
+        ((distance(target, enemy_position), enemy) for enemy, enemy_position in enemy_positions),
+        key=lambda item: item[0],
+    )
+    if nearest_target[0] <= target_radius:
+        return _enemy_threat_reason("near action target", nearest_target[1], nearest_target[0], target_radius)
+
+    if action.get("type") == "move_to":
+        nearest_path = min(
+            (
+                (_distance_to_segment(enemy_position, current, target), enemy)
+                for enemy, enemy_position in enemy_positions
+            ),
+            key=lambda item: item[0],
+        )
+        if nearest_path[0] <= path_radius:
+            return _enemy_threat_reason("near movement path", nearest_path[1], nearest_path[0], path_radius)
+    return ""
+
+
 def _real_player_execution_problem(observation: dict[str, Any]) -> str:
     execution = observation.get("execution") if isinstance(observation.get("execution"), dict) else {}
     player = observation.get("player") if isinstance(observation.get("player"), dict) else {}
@@ -1595,7 +1743,61 @@ def _real_player_execution_problem(observation: dict[str, Any]) -> str:
     if not character_valid:
         name = str(player.get("name") or execution.get("agent_name") or "unknown")
         return f"real player execution required, but player {name} has no valid character"
+    if player.get("controller_is_character") is False or execution.get("controller_is_character") is False:
+        name = str(player.get("name") or execution.get("agent_name") or "unknown")
+        return f"real player execution required, but player {name} is not in character controller mode"
     return ""
+
+
+def _action_target_position(action: dict[str, Any]) -> dict[str, float] | None:
+    for key in ("position", "near"):
+        position = _position_or_none(action.get(key))
+        if position is not None:
+            return position
+    return None
+
+
+def _position_or_none(value: Any) -> dict[str, float] | None:
+    if not isinstance(value, dict):
+        return None
+    try:
+        return {"x": float(value["x"]), "y": float(value["y"])}
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _distance_to_segment(point: dict[str, float], start: dict[str, float], end: dict[str, float]) -> float:
+    sx = float(start["x"])
+    sy = float(start["y"])
+    ex = float(end["x"])
+    ey = float(end["y"])
+    px = float(point["x"])
+    py = float(point["y"])
+    dx = ex - sx
+    dy = ey - sy
+    if dx == 0 and dy == 0:
+        return distance(point, start)
+    t = ((px - sx) * dx + (py - sy) * dy) / (dx * dx + dy * dy)
+    t = max(0.0, min(1.0, t))
+    closest = {"x": sx + t * dx, "y": sy + t * dy}
+    return distance(point, closest)
+
+
+def _enemy_threat_reason(scope: str, enemy: dict[str, Any], threat_distance: float, radius: float) -> str:
+    name = str(enemy.get("name") or enemy.get("type") or "enemy")
+    position = enemy.get("position") if isinstance(enemy.get("position"), dict) else {}
+    return (
+        "real player execution paused: "
+        f"enemy {name} is {threat_distance:.1f} tiles {scope} "
+        f"(limit {radius:.1f}) at {float(position.get('x') or 0.0):.1f},{float(position.get('y') or 0.0):.1f}"
+    )
+
+
+def _float_env(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, ""))
+    except (TypeError, ValueError):
+        return default
 
 
 def _read_json_file(path: Path) -> dict[str, Any]:

@@ -24,11 +24,25 @@ class ModlessLuaTests(unittest.TestCase):
         self.assertIn("REMOTE_RESOURCE_TILE_LIMIT", command)
         self.assertIn("distance_from_agent", command)
         self.assertIn("distance_from_base", command)
+        self.assertIn("player_move_state", command)
+        self.assertIn("player_actual_position", command)
+        self.assertIn("controller_is_character", command)
+        self.assertIn("auto_select_player_name", command)
         self.assertIn('observed_from = source_spec.source', command)
         self.assertIn("resources = collect_resources(base_anchor)", command)
         self.assertIn('execution = { mode = agent.kind == "server" and "virtual" or "player"', command)
         self.assertNotIn("ai_observe", command)
         self.assertNotIn("factorio_ai_autoplayer", command)
+
+    def test_auto_player_name_falls_through_to_connected_players(self):
+        command = build_modless_observe_command("auto")
+        named_lookup = 'if not auto_select_player_name(player_name) then local named = game.get_player(player_name)'
+        connected_lookup = "for _, player in pairs(game.connected_players) do"
+
+        self.assertIn('return normalized == "auto"', command)
+        self.assertIn(named_lookup, command)
+        self.assertIn(connected_lookup, command)
+        self.assertLess(command.index(named_lookup), command.index(connected_lookup))
 
     def test_rejects_unallowlisted_world_mutation_action(self):
         with self.assertRaises(ValueError):
@@ -40,6 +54,11 @@ class ModlessLuaTests(unittest.TestCase):
         self.assertIn("defines.direction.east", command)
         with self.assertRaises(ValueError):
             build_modless_action_command({"type": "set_walking_state", "direction": "up"})
+
+    def test_move_to_reports_player_move_state(self):
+        command = build_modless_action_command({"type": "move_to", "position": {"x": 1, "y": 2}})
+        self.assertIn("RCON Lua walking_state moves only one tick", command)
+        self.assertIn("use GUI input movement executor", command)
 
     def test_chart_action_is_allowlisted(self):
         command = build_modless_action_command({"type": "chart", "radius": 64})

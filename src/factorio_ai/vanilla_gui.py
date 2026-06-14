@@ -484,6 +484,14 @@ class VanillaGuiDriver:
         time.sleep(max(0.0, duration_seconds))
         self._send_key(virtual_key, key_up=True)
 
+    def hold_keys(self, keys: list[str], duration_seconds: float) -> None:
+        virtual_keys = [_virtual_key(key) for key in keys]
+        for virtual_key in virtual_keys:
+            self._send_key(virtual_key, key_up=False)
+        time.sleep(max(0.0, duration_seconds))
+        for virtual_key in reversed(virtual_keys):
+            self._send_key(virtual_key, key_up=True)
+
     def post_key_to_factorio(self, key: str, duration_seconds: float = 0.05) -> bool:
         window = self.find_factorio_window()
         if window is None:
