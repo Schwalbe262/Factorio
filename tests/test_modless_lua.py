@@ -25,6 +25,8 @@ class ModlessLuaTests(unittest.TestCase):
         self.assertIn("POWER_SITE_RADIUS = 1024", command)
         self.assertIn("POWER_SITE_WATER_TILE_LIMIT = 1600", command)
         self.assertIn("table.sort(water_tiles", command)
+        self.assertIn("local include_planning_sites = true", command)
+        self.assertIn("if include_planning_sites then", command)
         self.assertIn("distance_from_agent", command)
         self.assertIn("distance_from_base", command)
         self.assertIn("player_move_state", command)
@@ -36,6 +38,15 @@ class ModlessLuaTests(unittest.TestCase):
         self.assertIn('execution = { mode = agent.kind == "server" and "virtual" or "player"', command)
         self.assertNotIn("ai_observe", command)
         self.assertNotIn("factorio_ai_autoplayer", command)
+
+    def test_dashboard_lightweight_observe_can_skip_planning_site_collectors(self):
+        command = build_modless_observe_command("AI", include_planning_sites=False)
+
+        self.assertIn("local include_planning_sites = false", command)
+        self.assertIn("if include_planning_sites then", command)
+        self.assertIn("power_sites = power_sites", command)
+        self.assertIn("lab_sites = lab_sites", command)
+        self.assertIn("automation_sites = automation_sites", command)
 
     def test_auto_player_name_falls_through_to_connected_players(self):
         command = build_modless_observe_command("auto")

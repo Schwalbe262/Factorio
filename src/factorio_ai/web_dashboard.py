@@ -43,7 +43,8 @@ DEFAULT_LANG = "en"
 SUPPORTED_LANGS = {"en", "ko"}
 DEFAULT_PUBLIC_DASHBOARD_BASE_URL = "http://27.115.156.173:8787"
 KST = timezone(timedelta(hours=9), "KST")
-DEFAULT_WEB_CACHE_SECONDS = 30.0
+DEFAULT_WEB_CACHE_SECONDS = 60.0
+DEFAULT_WEB_REFRESH_SECONDS = 15.0
 _DASHBOARD_STATE_CACHE: dict[str, dict[str, Any]] = {}
 _DASHBOARD_STATE_REFRESHING: set[str] = set()
 _DASHBOARD_STATE_CACHE_LOCK = threading.Lock()
@@ -737,6 +738,13 @@ def _web_cache_seconds() -> float:
         return DEFAULT_WEB_CACHE_SECONDS
 
 
+def _web_refresh_seconds() -> float:
+    try:
+        return max(5.0, float(os.getenv("FACTORIO_AI_WEB_REFRESH_SECONDS", str(DEFAULT_WEB_REFRESH_SECONDS))))
+    except (TypeError, ValueError):
+        return DEFAULT_WEB_REFRESH_SECONDS
+
+
 def build_dashboard_state(cfg: AppConfig, objective: str) -> dict[str, Any]:
     timestamp = datetime.now(timezone.utc).isoformat()
     targets = load_targets(cfg.runtime_dir, objective)
@@ -862,7 +870,7 @@ def observe_dashboard_state(cfg: AppConfig) -> tuple[dict[str, Any], str]:
     except Exception as exc:  # noqa: BLE001
         mod_error = exc
     try:
-        return ModlessLuaController(cfg).observe(), "no-mod-rcon-lua"
+        return ModlessLuaController(cfg).observe(include_planning_sites=False), "no-mod-rcon-lua"
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError(
             "Factorio RCON is offline or neither the custom mod nor the no-mod Lua observation adapter responded. "
@@ -1070,12 +1078,13 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
 
 def _page(title: str, body: str, lang: str, objective: Any = None) -> str:
     objective_text = str(objective or "")
+    refresh_seconds = _web_refresh_seconds()
     return f"""<!doctype html>
 <html lang="{escape(lang)}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="refresh" content="5">
+  <meta http-equiv="refresh" content="{refresh_seconds:g}">
   <title>{escape(title)}</title>
   <style>
     :root {{

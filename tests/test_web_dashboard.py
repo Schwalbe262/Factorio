@@ -20,6 +20,7 @@ from factorio_ai.web_dashboard import (
     dashboard_path,
     friendly_dashboard_error,
     is_factorio_route,
+    observe_dashboard_state,
     render_dashboard,
     request_language,
 )
@@ -763,6 +764,28 @@ class WebDashboardTests(unittest.TestCase):
         self.assertEqual(second["updated_at"], "first")
         self.assertFalse(refreshed["cache"]["hit"])
         self.assertEqual(refreshed["updated_at"], "second")
+
+    def test_no_mod_dashboard_observe_uses_lightweight_planning_site_mode(self):
+        cfg = SimpleNamespace(runtime_dir=Path("runtime"), log_dir=Path("logs"))
+
+        with (
+            patch("factorio_ai.web_dashboard.FactorioController") as factorio_controller,
+            patch("factorio_ai.web_dashboard.ModlessLuaController") as modless_controller,
+        ):
+            factorio_controller.return_value.observe.side_effect = RuntimeError("custom mod unavailable")
+            modless_controller.return_value.observe.return_value = {"ok": True, "tick": 1}
+
+            observation, adapter = observe_dashboard_state(cfg)
+
+        self.assertEqual(observation["tick"], 1)
+        self.assertEqual(adapter, "no-mod-rcon-lua")
+        modless_controller.return_value.observe.assert_called_once_with(include_planning_sites=False)
+
+    def test_dashboard_refresh_interval_is_configurable(self):
+        with patch.dict(os.environ, {"FACTORIO_AI_WEB_REFRESH_SECONDS": "20"}):
+            html = render_dashboard({"ok": False, "objective": "launch_rocket_program", "error": "offline"})
+
+        self.assertIn('http-equiv="refresh" content="20"', html)
 
 
 if __name__ == "__main__":

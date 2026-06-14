@@ -113,3 +113,11 @@
 - After: planner selected `mine coal` with `radius=8` from the current live position.
 - Evidence: `{"after":{"action":"mine coal","radius":8,"tests":"359 passed"},"before":{"failure":"move_to timed out; remaining distance 13.97"},"source_loop":72}`
 - Remaining risk: Other non-resource move targets may still need action-specific tolerance if future loops expose exact-position stalls.
+
+## 2026-06-15 02:01:24 +09:00 - Insight 13
+- Source loop: Loop 106
+- Improvement: No-mod monitoring, idle GPU filler, autopilot, strategy, and default observe paths no longer run full water/site planning scans by default, and no-mod autopilot refuses accidental connected-observer control unless explicitly allowed.
+- Before: background no-mod autopilot used `FACTORIO_AI_AGENT_PLAYER=auto` with GUI movement, moved the connected `r1jae` observer, brought the Factorio window to the foreground, and idle/layout/observe paths could repeat full `collect_power_sites` scans after `POWER_SITE_RADIUS=1024`.
+- After: Web UI runs as `AI` with lightweight observe and slower refresh/cache settings; no-mod idle/autopilot/default observe use lightweight mode; full planning-site observe is retried only when the planner explicitly needs missing water/lab/automation site candidates, then cached.
+- Evidence: `{"after":{"active_processes":["start-no-mod-server pid=80472","web pid=58356"],"cli_default_planning_site_counts":{"automation_sites":0,"lab_sites":0,"power_sites":0},"lightweight_observe_seconds":2.146,"tests":"368 passed"},"before":{"failure":"connected observer controlled and Factorio GUI repeatedly foregrounded","idle_full_observe_period":"5-10s while stale","web_full_observe_cache_seconds":30},"source_loop":106}`
+- Remaining risk: Lightweight observe still scans resources/entities and currently took about 2.1s on this map, so if lag remains noticeable the next target is resource/entity scan throttling or cached monitor snapshots.

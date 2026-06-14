@@ -39,6 +39,33 @@ from .trace_archive import archive_training_traces, trace_archive_summary
 from .run_journal import run_journal_summary
 
 
+def _truthy_env(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _observer_player_control_problem(cfg: Any) -> str:
+    player_name = str(getattr(cfg, "agent_player_name", "") or "").strip().lower()
+    if player_name != "auto":
+        return ""
+    if _truthy_env("FACTORIO_AI_ALLOW_OBSERVER_CONTROL"):
+        return ""
+    if not (_truthy_env("FACTORIO_AI_REQUIRE_REAL_PLAYER") or _truthy_env("FACTORIO_AI_USE_GUI_INPUT_FOR_MOVEMENT")):
+        return ""
+    return (
+        "refusing to control the auto-selected connected player. "
+        "Use the default AI/server agent for autonomous runs, or set "
+        "FACTORIO_AI_ALLOW_OBSERVER_CONTROL=1 only for an explicit manual test."
+    )
+
+
+def _guard_observer_player_control(cfg: Any, command: str) -> None:
+    problem = _observer_player_control_problem(cfg)
+    if not problem:
+        return
+    print_json({"ok": False, "command": command, "reason": problem})
+    raise SystemExit(1)
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Factorio AI autoplayer")
     parser.add_argument("--config", help="Path to config.json")
@@ -163,6 +190,11 @@ def main(argv: list[str] | None = None) -> None:
         help="Print observation JSON through vanilla /silent-command Lua over RCON",
     )
     no_mod_observe_parser.add_argument("--player", help="Preferred player name to observe")
+    no_mod_observe_parser.add_argument(
+        "--full-planning-sites",
+        action="store_true",
+        help="Include expensive water/lab/automation placement candidate scans",
+    )
 
     no_mod_action_parser = subparsers.add_parser(
         "no-mod-action",
@@ -731,7 +763,12 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     if args.command == "no-mod-observe":
-        print_json(ModlessLuaController(cfg).observe(player_name=args.player))
+        print_json(
+            ModlessLuaController(cfg).observe(
+                player_name=args.player,
+                include_planning_sites=args.full_planning_sites,
+            )
+        )
         return
 
     if args.command == "no-mod-action":
@@ -783,6 +820,7 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     if args.command == "run-no-mod-strategy-step":
+        _guard_observer_player_control(cfg, args.command)
         require_llm = args.require_llm or os.getenv("FACTORIO_AI_REQUIRE_LLM_STRATEGY", "").lower() in {
             "1",
             "true",
@@ -824,6 +862,7 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     if args.command == "run-no-mod-autopilot":
+        _guard_observer_player_control(cfg, args.command)
         require_llm = args.require_llm or os.getenv("FACTORIO_AI_REQUIRE_LLM_STRATEGY", "").lower() in {
             "1",
             "true",
@@ -925,7 +964,7 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.command == "validate-layout-candidate":
         try:
-            observation = ModlessLuaController(cfg).observe(player_name=args.player)
+            observation = ModlessLuaController(cfg).observe(player_name=args.player, include_planning_sites=False)
             adapter = "no-mod-rcon-lua"
         except Exception:
             observation = FactorioController(cfg).observe()

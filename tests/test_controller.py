@@ -1052,6 +1052,114 @@ class ControllerTests(unittest.TestCase):
         submitted = submit_task.call_args.args[0]
         self.assertIn("autopilot_heartbeat_stale", submitted["payload"]["active_skill"])
 
+    def test_no_mod_idle_layout_loop_uses_lightweight_observe(self):
+        class FakeModless:
+            def __init__(self):
+                self.calls = []
+
+            def observe(self, **kwargs):
+                self.calls.append(kwargs)
+                return {
+                    "ok": True,
+                    "tick": 5,
+                    "inventory": {},
+                    "entities": [],
+                    "resources": [],
+                    "research": {"technologies": {}},
+                }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cfg = replace(make_test_config(Path(temp_dir)), slurm_enabled=True)
+            cfg.runtime_dir.mkdir(parents=True, exist_ok=True)
+            (cfg.runtime_dir / "autopilot-heartbeat.json").write_text(
+                json.dumps(
+                    {
+                        "active": True,
+                        "state": "cycle_start",
+                        "updated_at": (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat(),
+                        "objective": "launch_rocket_program",
+                        "cycle": 3,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            controller = ModlessFactorioController(cfg)
+            fake_modless = FakeModless()
+            controller._modless = fake_modless
+            with (
+                patch.dict("os.environ", {"FACTORIO_AI_BACKGROUND_LAYOUT_MODE": "queue"}),
+                patch("factorio_ai.remote_slurm.submit_task", return_value="layout-stale.json"),
+                patch("factorio_ai.remote_slurm.read_task_state", return_value=("running", None, "")),
+            ):
+                summary = controller.run_idle_layout_loop(
+                    cycles=1,
+                    sleep_seconds=0,
+                    stale_seconds=15,
+                    min_submit_interval_seconds=0,
+                )
+
+        self.assertTrue(summary.ok)
+        self.assertEqual(fake_modless.calls[0]["include_planning_sites"], False)
+        self.assertEqual(fake_modless.calls[0]["player_name"], "AI")
+
+    def test_no_mod_default_observe_uses_lightweight_mode(self):
+        class FakeModless:
+            def __init__(self):
+                self.calls = []
+
+            def observe(self, **kwargs):
+                self.calls.append(kwargs)
+                return {"ok": True, "tick": 1, "power_sites": [], "lab_sites": [], "automation_sites": []}
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cfg = make_test_config(Path(temp_dir))
+            controller = ModlessFactorioController(cfg)
+            fake_modless = FakeModless()
+            controller._modless = fake_modless
+
+            observation = controller.observe()
+
+        self.assertEqual(observation["tick"], 1)
+        self.assertEqual(fake_modless.calls[0]["include_planning_sites"], False)
+
+    def test_no_mod_retries_planning_site_observe_only_when_site_candidate_is_needed(self):
+        class FakeModless:
+            def __init__(self):
+                self.calls = []
+
+            def observe(self, **kwargs):
+                self.calls.append(kwargs)
+                if kwargs.get("include_planning_sites"):
+                    return {"ok": True, "tick": 2, "power_sites": [{"layout": {}}], "lab_sites": [], "automation_sites": []}
+                return {"ok": True, "tick": 1, "power_sites": [], "lab_sites": [], "automation_sites": []}
+
+        class FakeSkill:
+            def next_action(self, observation):
+                if observation.get("power_sites"):
+                    return PlannerDecision({"type": "wait", "ticks": 1}, "site candidate available")
+                return PlannerDecision(None, "cannot find a buildable water site for steam power")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cfg = make_test_config(Path(temp_dir))
+            controller = ModlessFactorioController(cfg)
+            fake_modless = FakeModless()
+            controller._modless = fake_modless
+            initial = controller.observe()
+            initial_decision = FakeSkill().next_action(initial)
+
+            observation, decision = controller._maybe_retry_skill_with_planning_sites(
+                FakeSkill(),
+                initial,
+                initial_decision,
+            )
+            cached = controller.observe()
+
+        self.assertEqual(decision.action, {"type": "wait", "ticks": 1})
+        self.assertEqual(observation["tick"], 2)
+        self.assertEqual([call["include_planning_sites"] for call in fake_modless.calls], [False, True, False])
+        self.assertEqual(cached["planning_sites_cached_from_tick"], 2)
+        self.assertEqual(cached["power_sites"], [{"layout": {}}])
+
     def test_idle_layout_loop_skips_when_autopilot_heartbeat_is_fresh_busy(self):
         class BusyController(FactorioController):
             def observe(self):

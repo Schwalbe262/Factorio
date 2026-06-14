@@ -179,6 +179,20 @@ class IdleLayoutLoopSummary:
         }
 
 
+_PLANNING_SITE_RETRY_MARKERS = (
+    "cannot find a buildable water site",
+    "cannot find a powered or wireable lab site",
+    "cannot find a powered or wireable site",
+)
+
+
+def _planning_site_retry_needed(decision: PlannerDecision) -> bool:
+    if decision.done or decision.action is not None:
+        return False
+    reason = decision.reason.lower()
+    return any(marker in reason for marker in _PLANNING_SITE_RETRY_MARKERS)
+
+
 class FactorioController:
     def __init__(self, cfg: AppConfig) -> None:
         self.cfg = cfg
@@ -838,7 +852,7 @@ class FactorioController:
                 if idle:
                     idle_cycles += 1
                     try:
-                        observation = self.observe()
+                        observation = self._observe_for_idle_layout()
                     except Exception as exc:  # noqa: BLE001
                         self._write_background_layout_log(
                             {
@@ -940,6 +954,9 @@ class FactorioController:
             log_path=log_path,
             interrupted=interrupted,
         )
+
+    def _observe_for_idle_layout(self) -> dict[str, Any]:
+        return self.observe()
 
     def begin_codex_work(
         self,
@@ -1197,11 +1214,12 @@ class FactorioController:
         with log_path.open("a", encoding="utf-8") as log_file:
             for step in range(1, max_steps + 1):
                 self._wait_for_review_window()
-                observation = self.observe()
+                observation = self._observe_for_skill_loop(goal, step)
                 if initial_item_count is None:
                     initial_item_count = total_item_count(observation, target_item)
                 self._maybe_progress_background_layout_work(observation, objective, goal, step)
                 decision = skill.next_action(observation)
+                observation, decision = self._maybe_retry_skill_with_planning_sites(skill, observation, decision)
                 self._write_log(log_file, step, observation, decision, None)
                 if decision.done:
                     self._maybe_progress_background_layout_work(observation, objective, goal, step, force_poll=True)
@@ -1221,14 +1239,25 @@ class FactorioController:
                 elif action.get("type") == "move_to":
                     arrived, reason = self._wait_for_move(action)
                     if not arrived:
-                        observation = self.observe()
+                        observation = self._observe_for_skill_loop(goal, step)
                         return finish(False, reason, step, observation)
                 else:
                     time.sleep(0.2)
 
-        observation = self.observe()
+        observation = self._observe_for_skill_loop(goal, max_steps)
         self._maybe_progress_background_layout_work(observation, objective, goal, max_steps, force_poll=True)
         return finish(False, f"max steps reached: {max_steps}", max_steps, observation)
+
+    def _observe_for_skill_loop(self, goal: str, step: int) -> dict[str, Any]:
+        return self.observe()
+
+    def _maybe_retry_skill_with_planning_sites(
+        self,
+        skill: Any,
+        observation: dict[str, Any],
+        decision: PlannerDecision,
+    ) -> tuple[dict[str, Any], PlannerDecision]:
+        return observation, decision
 
     def _autopilot_heartbeat_path(self) -> Path:
         return self.cfg.runtime_dir / "autopilot-heartbeat.json"
@@ -1897,6 +1926,7 @@ class ModlessFactorioController(FactorioController):
     def __init__(self, cfg: AppConfig) -> None:
         super().__init__(cfg)
         self._modless = ModlessLuaController(cfg)
+        self._planning_sites_cache: dict[str, Any] = {}
 
     def run_strategy_step(
         self,
@@ -1966,10 +1996,53 @@ class ModlessFactorioController(FactorioController):
         )
 
     def observe(self) -> dict[str, Any]:
-        response = self._modless.observe(player_name=self._configured_agent_player_name())
+        return self._observe_modless(include_planning_sites=False)
+
+    def _observe_for_idle_layout(self) -> dict[str, Any]:
+        return self._observe_modless(include_planning_sites=False)
+
+    def _observe_for_skill_loop(self, goal: str, step: int) -> dict[str, Any]:
+        return self._observe_modless(include_planning_sites=False)
+
+    def _maybe_retry_skill_with_planning_sites(
+        self,
+        skill: Any,
+        observation: dict[str, Any],
+        decision: PlannerDecision,
+    ) -> tuple[dict[str, Any], PlannerDecision]:
+        if not _planning_site_retry_needed(decision):
+            return observation, decision
+        full_observation = self._observe_modless(include_planning_sites=True)
+        return full_observation, skill.next_action(full_observation)
+
+    def _observe_modless(self, *, include_planning_sites: bool) -> dict[str, Any]:
+        response = self._modless.observe(
+            player_name=self._configured_agent_player_name(),
+            include_planning_sites=include_planning_sites,
+        )
         if not response.get("ok"):
             raise RuntimeError(f"no-mod observe failed: {response}")
-        return response
+        if include_planning_sites:
+            self._update_planning_sites_cache(response)
+            return response
+        return self._merge_cached_planning_sites(response)
+
+    def _update_planning_sites_cache(self, observation: dict[str, Any]) -> None:
+        for key in ("power_sites", "lab_sites", "automation_sites"):
+            sites = observation.get(key)
+            if isinstance(sites, list):
+                self._planning_sites_cache[key] = sites
+        self._planning_sites_cache["tick"] = observation.get("tick")
+
+    def _merge_cached_planning_sites(self, observation: dict[str, Any]) -> dict[str, Any]:
+        if not self._planning_sites_cache:
+            return observation
+        merged = dict(observation)
+        for key in ("power_sites", "lab_sites", "automation_sites"):
+            if key in self._planning_sites_cache:
+                merged[key] = self._planning_sites_cache[key]
+        merged["planning_sites_cached_from_tick"] = self._planning_sites_cache.get("tick")
+        return merged
 
     def act(self, action: dict[str, Any]) -> dict[str, Any]:
         validate_action(action)

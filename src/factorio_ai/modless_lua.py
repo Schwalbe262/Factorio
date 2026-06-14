@@ -46,9 +46,9 @@ class ModlessLuaController:
     def __init__(self, cfg: AppConfig) -> None:
         self.cfg = cfg
 
-    def observe(self, *, player_name: str | None = None) -> dict[str, Any]:
+    def observe(self, *, player_name: str | None = None, include_planning_sites: bool = True) -> dict[str, Any]:
         effective_player = self.cfg.agent_player_name if player_name is None else player_name
-        command = build_modless_observe_command(effective_player)
+        command = build_modless_observe_command(effective_player, include_planning_sites=include_planning_sites)
         with self._client() as client:
             return execute_json_lua_command(client, command)
 
@@ -78,8 +78,15 @@ def confirm_lua_console(client: FactorioRconClient) -> None:
     client.execute(_CONFIRM_LUA_COMMAND, drain_seconds=0.05)
 
 
-def build_modless_observe_command(player_name: str = "") -> str:
-    lua = _COMMON_LUA + "\n" + _OBSERVE_LUA.replace("__PLAYER_NAME__", _lua_string(player_name))
+def build_modless_observe_command(player_name: str = "", *, include_planning_sites: bool = True) -> str:
+    lua = (
+        _COMMON_LUA
+        + "\n"
+        + _OBSERVE_LUA.replace("__PLAYER_NAME__", _lua_string(player_name)).replace(
+            "__INCLUDE_PLANNING_SITES__",
+            "true" if include_planning_sites else "false",
+        )
+    )
     return _silent_command(lua)
 
 
@@ -852,6 +859,15 @@ local function collect_automation_sites(surface, position, force)
   return sites
 end
 local base_anchor = force_spawn_position(surface, agent.force)
+local include_planning_sites = __INCLUDE_PLANNING_SITES__
+local power_sites = {}
+local lab_sites = {}
+local automation_sites = {}
+if include_planning_sites then
+  power_sites = collect_power_sites(surface, base_anchor, agent.force, origin)
+  lab_sites = collect_lab_sites(surface, origin, agent.force)
+  automation_sites = collect_automation_sites(surface, origin, agent.force)
+end
 json_reply({
   ok = true,
   mode = "modless-rcon-lua",
@@ -865,9 +881,9 @@ json_reply({
   resources = collect_resources(base_anchor),
   entities = collect_entities(),
   enemies = collect_enemies(),
-  power_sites = collect_power_sites(surface, base_anchor, agent.force, origin),
-  lab_sites = collect_lab_sites(surface, origin, agent.force),
-  automation_sites = collect_automation_sites(surface, origin, agent.force),
+  power_sites = power_sites,
+  lab_sites = lab_sites,
+  automation_sites = automation_sites,
   pollution = { at_player = surface_pollution(surface, origin) },
   factory_events = {},
   research = collect_research()
