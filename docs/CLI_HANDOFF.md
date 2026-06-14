@@ -1,10 +1,10 @@
 # Factorio Automation CLI Handoff
 
-Last updated: 2026-06-14 19:52 KST
+Last updated: 2026-06-14 19:55 KST
 Repository: `C:\Users\NEC\Documents\Factorio`
 GitHub: `https://github.com/Schwalbe262/Factorio_automation`
 Current branch: `master`
-Last pushed base before this handoff: `24df048 Part 65: validate layout blueprints and add CLI handoff`
+Latest pushed commit at this handoff: `c3f7c5b Part 66: sandbox validate layout candidates`
 
 ## Goal
 
