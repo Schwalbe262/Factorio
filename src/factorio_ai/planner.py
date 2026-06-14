@@ -1478,14 +1478,14 @@ class CoalSupplySkill:
                 "place burner mining drill on coal supply patch",
             )
 
-        if entity_item_count(drill, "coal") < 3:
+        if entity_item_count(drill, "coal") < 12:
             return _fuel_burner_line_entity(
                 observation,
                 player,
                 drill,
                 entity_name="burner-mining-drill",
-                threshold=3,
-                insert_count=5,
+                threshold=12,
+                insert_count=16,
                 context="coal supply site",
                 support_skill=IronPlateSkill(target_count=20),
                 far_fuel_reason="coal supply site is too far from available hand fuel; build closer coal logistics first",
