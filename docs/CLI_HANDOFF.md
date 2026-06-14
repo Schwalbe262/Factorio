@@ -362,10 +362,10 @@ Part 69 token usage sample:
 
 ```powershell
 $env:PYTHONPATH='src'
-python -m factorio_ai.cli record-token-usage --tokens-used 35642300 --label "part69 placement search"
+python -m factorio_ai.cli record-token-usage --tokens-used 35660655 --label "part69 placement search final"
 ```
 
-Result: appended `delta_tokens=180070` to `logs/token_usage.jsonl`, which is read by the web dashboard token graph.
+Result: appended a final `delta_tokens=18355` row to `logs/token_usage.jsonl`; combined Part 69 rows total `198425` tokens and are read by the web dashboard token graph.
 
 ## Live Smoke Checks Already Run
 
