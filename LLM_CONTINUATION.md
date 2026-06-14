@@ -317,6 +317,24 @@ The active blocked executor is persisted in:
 runtime/codex-wait.json
 ```
 
+When the user asks Codex to implement a missing build-item/site executor, start
+the wait state before editing so Slurm keeps doing useful LLM work while Codex
+is busy:
+
+```powershell
+$env:PYTHONPATH="src"
+$env:FACTORIO_AI_SLURM_ENABLED="1"
+$env:FACTORIO_AI_CODEX_WAIT_LAYOUT_AUTOSTART="1"
+python -m factorio_ai.cli begin-codex-work --no-mod --objective launch_rocket_program --selected-skill <skill-name> --reason "Codex is implementing the missing deterministic executor."
+```
+
+After tests pass and the part is committed/pushed, clear it:
+
+```powershell
+$env:PYTHONPATH="src"
+python -m factorio_ai.cli finish-codex-work --no-mod --selected-skill <skill-name> --reason "Codex implementation completed and pushed"
+```
+
 Autopilot reads this file at the start of each cycle and submits a layout
 heartbeat before asking for another strategy step. This means that if a
 `bootstrap_build_item_mall`-style executor takes time to implement, the Slurm

@@ -683,6 +683,56 @@ class FactorioController:
             interrupted=interrupted,
         )
 
+    def begin_codex_work(
+        self,
+        objective: str,
+        selected_skill: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        selected_skill = selected_skill.strip()
+        if not selected_skill:
+            raise ValueError("selected_skill is required")
+        reason = reason.strip() or "Codex is implementing a missing deterministic executor."
+        strategy = {
+            "selected_skill": selected_skill,
+            "reason": reason,
+            "source": "codex_manual_wait",
+            "skill_status": {
+                "name": selected_skill,
+                "implemented": False,
+                "executor": None,
+                "codex_required": True,
+            },
+        }
+        self._record_codex_wait_state(objective, selected_skill, reason, strategy)
+        state = self._read_codex_wait_state()
+        process = _read_json_file(self._codex_wait_layout_process_path())
+        return {
+            "ok": True,
+            "objective": objective,
+            "selectedSkill": selected_skill,
+            "waitState": state,
+            "layoutLoop": process,
+        }
+
+    def finish_codex_work(
+        self,
+        selected_skill: str,
+        *,
+        clear_reason: str = "Codex implementation completed",
+    ) -> dict[str, Any]:
+        selected_skill = selected_skill.strip()
+        if not selected_skill:
+            raise ValueError("selected_skill is required")
+        cleared = self._clear_codex_wait_state(selected_skill, clear_reason=clear_reason)
+        state = self._read_codex_wait_state()
+        return {
+            "ok": cleared,
+            "selectedSkill": selected_skill,
+            "waitState": state,
+            "reason": clear_reason if cleared else "no matching active Codex wait state",
+        }
+
     def _skill_run_config(
         self,
         skill_name: str,
@@ -952,16 +1002,22 @@ class FactorioController:
             return {}
         return data if isinstance(data, dict) else {}
 
-    def _clear_codex_wait_state(self, selected_skill: str) -> None:
+    def _clear_codex_wait_state(
+        self,
+        selected_skill: str,
+        *,
+        clear_reason: str = "deterministic executor is now available",
+    ) -> bool:
         state = self._read_codex_wait_state()
         if not state.get("active") or state.get("selected_skill") != selected_skill:
-            return
+            return False
         state["active"] = False
         state["cleared_at"] = datetime.now(timezone.utc).isoformat()
-        state["clear_reason"] = "deterministic executor is now available"
+        state["clear_reason"] = clear_reason
         self.cfg.runtime_dir.mkdir(parents=True, exist_ok=True)
         with self._codex_wait_path().open("w", encoding="utf-8") as file:
             json.dump(state, file, ensure_ascii=False, indent=2)
+        return True
 
     def _codex_wait_layout_process_path(self) -> Path:
         return self.cfg.runtime_dir / "codex-wait-layout-loop.json"

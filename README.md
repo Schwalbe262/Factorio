@@ -433,8 +433,25 @@ candidates while Codex implements the missing build logic. Autopilot cycles puls
 if the next strategy request fails, so layout work does not stop just because a build-item executor is
 still being written.
 
-For a standalone Codex wait, run the dedicated loop after a blocked strategy step writes
-`runtime/codex-wait.json`:
+For a standalone Codex wait, manually mark the missing executor before starting the coding work.
+This is the path to use when the user asks Codex to implement a build-item or site executor and
+the Slurm LLM should keep improving layouts until Codex replies that the work is done:
+
+```powershell
+$env:PYTHONPATH='src'
+$env:FACTORIO_AI_SLURM_ENABLED='1'
+$env:FACTORIO_AI_CODEX_WAIT_LAYOUT_AUTOSTART='1'
+python -m factorio_ai.cli begin-codex-work --no-mod --objective launch_rocket_program --selected-skill bootstrap_build_item_mall --reason "Codex is implementing the missing build item executor."
+```
+
+When the implementation is tested and committed, clear the wait state:
+
+```powershell
+$env:PYTHONPATH='src'
+python -m factorio_ai.cli finish-codex-work --no-mod --selected-skill bootstrap_build_item_mall --reason "Codex implementation completed and pushed"
+```
+
+You can also run the dedicated loop after a blocked strategy step writes `runtime/codex-wait.json`:
 
 ```powershell
 $env:PYTHONPATH='src'

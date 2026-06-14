@@ -266,6 +266,66 @@ class ControllerTests(unittest.TestCase):
         self.assertIn("run-no-mod-codex-wait-layout-loop", process_state["command"])
         self.assertTrue(any(row["event"] == "layout_codex_wait_loop_started" for row in rows))
 
+    def test_manual_codex_work_start_autostarts_no_mod_layout_loop(self):
+        class DummyProcess:
+            pid = 9876
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cfg = replace(make_test_config(Path(temp_dir)), slurm_enabled=True)
+            controller = ModlessFactorioController(cfg)
+            with (
+                patch.dict(
+                    "os.environ",
+                    {
+                        "FACTORIO_AI_CODEX_WAIT_LAYOUT_AUTOSTART": "1",
+                        "FACTORIO_AI_CODEX_WAIT_LAYOUT_SLEEP_SECONDS": "0",
+                    },
+                ),
+                patch("factorio_ai.controller.subprocess.Popen", return_value=DummyProcess()) as popen,
+            ):
+                summary = controller.begin_codex_work(
+                    "launch_rocket_program",
+                    "future_build_item_skill",
+                    "Codex is implementing the missing build item executor.",
+                )
+
+            wait_state = json.loads((cfg.runtime_dir / "codex-wait.json").read_text(encoding="utf-8"))
+            process_state = json.loads((cfg.runtime_dir / "codex-wait-layout-loop.json").read_text(encoding="utf-8"))
+            rows = [
+                json.loads(line)
+                for line in (cfg.log_dir / "layout-improvement-background.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+
+        popen.assert_called_once()
+        command = popen.call_args.args[0]
+        self.assertIn("run-no-mod-codex-wait-layout-loop", command)
+        self.assertTrue(summary["waitState"]["active"])
+        self.assertEqual(summary["layoutLoop"]["pid"], 9876)
+        self.assertTrue(wait_state["active"])
+        self.assertEqual(wait_state["selected_skill"], "future_build_item_skill")
+        self.assertEqual(process_state["pid"], 9876)
+        self.assertTrue(any(row["event"] == "layout_codex_wait_loop_started" for row in rows))
+
+    def test_manual_codex_work_finish_clears_wait_state(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cfg = make_test_config(Path(temp_dir))
+            controller = FactorioController(cfg)
+            controller.begin_codex_work(
+                "launch_rocket_program",
+                "future_build_item_skill",
+                "Codex is implementing the missing build item executor.",
+            )
+            summary = controller.finish_codex_work(
+                "future_build_item_skill",
+                clear_reason="new build item executor committed",
+            )
+            wait_state = json.loads((cfg.runtime_dir / "codex-wait.json").read_text(encoding="utf-8"))
+
+        self.assertTrue(summary["ok"])
+        self.assertFalse(summary["waitState"]["active"])
+        self.assertFalse(wait_state["active"])
+        self.assertEqual(wait_state["clear_reason"], "new build item executor committed")
+
     def test_autopilot_pulses_layout_work_while_codex_wait_state_is_active(self):
         observation = {
             "tick": 2,

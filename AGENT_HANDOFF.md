@@ -316,6 +316,11 @@ Key constraints to preserve:
   The active wait is persisted in `runtime/codex-wait.json`; autopilot emits a
   layout heartbeat from that file at cycle start, even if the next strategy
   call fails.
+  If the user directly asks Codex to implement such an executor, start the wait
+  explicitly before editing:
+  `python -m factorio_ai.cli begin-codex-work --no-mod --objective launch_rocket_program --selected-skill <skill-name>`.
+  Clear it after tests and push:
+  `python -m factorio_ai.cli finish-codex-work --no-mod --selected-skill <skill-name>`.
   For one-shot blocked strategy runs, either start
   `run_factorio_no_mod_codex_wait_layout_loop.bat` or set
   `FACTORIO_AI_CODEX_WAIT_LAYOUT_AUTOSTART=1` so the blocked command launches

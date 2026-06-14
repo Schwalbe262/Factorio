@@ -234,6 +234,26 @@ def main(argv: list[str] | None = None) -> None:
     no_mod_codex_wait_layout_parser.add_argument("--cycles", type=int, default=0, help="Number of pulses; 0 means run until the wait state clears")
     no_mod_codex_wait_layout_parser.add_argument("--sleep-seconds", type=float, default=20.0)
 
+    begin_codex_parser = subparsers.add_parser(
+        "begin-codex-work",
+        help="Mark a missing executor as being implemented by Codex and keep LLM layout work running",
+    )
+    begin_codex_parser.add_argument("--objective", default="launch_rocket_program")
+    begin_codex_parser.add_argument("--selected-skill", required=True)
+    begin_codex_parser.add_argument(
+        "--reason",
+        default="Codex is implementing a missing deterministic executor.",
+    )
+    begin_codex_parser.add_argument("--no-mod", action="store_true", help="Use the no-custom-mod controller for loop autostart")
+
+    finish_codex_parser = subparsers.add_parser(
+        "finish-codex-work",
+        help="Clear the Codex wait state so the background layout loop can stop",
+    )
+    finish_codex_parser.add_argument("--selected-skill", required=True)
+    finish_codex_parser.add_argument("--reason", default="Codex implementation completed")
+    finish_codex_parser.add_argument("--no-mod", action="store_true", help="Use the no-custom-mod controller")
+
     web_parser = subparsers.add_parser("web", help="Serve the Factorio production monitor at /factorio")
     web_parser.add_argument("--host", default="0.0.0.0")
     web_parser.add_argument("--port", type=int, default=18889)
@@ -779,6 +799,16 @@ def main(argv: list[str] | None = None) -> None:
         print_json(payload)
         if not summary.ok:
             raise SystemExit(1)
+        return
+
+    if args.command == "begin-codex-work":
+        controller = ModlessFactorioController(cfg) if args.no_mod else FactorioController(cfg)
+        print_json(controller.begin_codex_work(args.objective, args.selected_skill, args.reason))
+        return
+
+    if args.command == "finish-codex-work":
+        controller = ModlessFactorioController(cfg) if args.no_mod else FactorioController(cfg)
+        print_json(controller.finish_codex_work(args.selected_skill, clear_reason=args.reason))
         return
 
     if args.command == "web":
