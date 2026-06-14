@@ -10,6 +10,7 @@ from factorio_ai.config import AppConfig
 from factorio_ai.controller import FactorioController, ModlessFactorioController, RunSummary, StrategyStepSummary
 from factorio_ai.llm_log import llm_decision_log_path
 from factorio_ai.models import PlannerDecision
+from factorio_ai.site_selection import save_selected_improvement_site
 
 
 def make_test_config(root: Path) -> AppConfig:
@@ -748,6 +749,12 @@ class ControllerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             cfg = replace(make_test_config(Path(temp_dir)), slurm_enabled=True)
             cfg.runtime_dir.mkdir(parents=True, exist_ok=True)
+            save_selected_improvement_site(
+                cfg.runtime_dir,
+                "launch_rocket_program",
+                {"site_id": "build_item_mall:2,2", "kind": "build_item_mall", "item": "transport-belt"},
+                selected_at="2026-06-14T00:00:00+00:00",
+            )
             (cfg.runtime_dir / "codex-wait.json").write_text(
                 json.dumps(
                     {
@@ -783,6 +790,7 @@ class ControllerTests(unittest.TestCase):
         submit_task.assert_called_once()
         submitted = submit_task.call_args.args[0]
         self.assertEqual(submitted["payload"]["active_skill"], "codex_wait:future_build_item_skill")
+        self.assertEqual(submitted["payload"]["selected_improvement_site"]["site_id"], "build_item_mall:2,2")
         self.assertTrue(any(row["event"] == "layout_codex_wait_heartbeat" for row in rows))
         self.assertTrue(any(row["event"] == "layout_task_submitted" for row in rows))
 

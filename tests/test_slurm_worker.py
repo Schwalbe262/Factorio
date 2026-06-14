@@ -224,6 +224,30 @@ class SlurmWorkerTests(unittest.TestCase):
         self.assertIn("Codex reports that the executor work is complete", compact["instruction"])
         self.assertIn("simulation only", compact["instruction"])
 
+    def test_compact_layout_improvement_payload_preserves_selected_site(self):
+        compact = compact_layout_improvement_payload(
+            {
+                "objective": "launch_rocket_program",
+                "active_skill": "produce_iron_plate",
+                "active_step": 1,
+                "observation": {"inventory": {}, "entities": []},
+                "production_targets": {},
+                "factory_monitor": {"factory_sites": [], "logistics_links": []},
+                "selected_improvement_site": {
+                    "site_id": "build_item_mall:2,2",
+                    "kind": "build_item_mall",
+                    "item": "transport-belt",
+                },
+            }
+        )
+
+        self.assertEqual(compact["selected_improvement_site"]["site_id"], "build_item_mall:2,2")
+        self.assertEqual(
+            compact["layout_improvement"]["selected_improvement_site"]["site_id"],
+            "build_item_mall:2,2",
+        )
+        self.assertEqual(compact["layout_improvement"]["opportunities"][0]["kind"], "operator_selected_site")
+
     def test_layout_payload_includes_sandbox_validation_feedback(self):
         feedback = {
             "entry_count": 1,

@@ -17,6 +17,7 @@ from .planner import (
     factory_layout_structure,
 )
 from .layout_validation import merge_sandbox_validation_feedback
+from .site_selection import sanitize_selected_improvement_site
 from .skill_registry import IMPLEMENTED_SKILLS
 from .strategy import heuristic_strategy, make_strategy_payload, normalize_strategy_response, reconcile_strategy_decision
 
@@ -188,6 +189,9 @@ def run_strategy_request(payload: dict[str, Any]) -> dict[str, Any]:
         objective=str(payload.get("objective") or payload.get("goal") or "launch_rocket_program"),
         observation=payload.get("observation") if isinstance(payload.get("observation"), dict) else {},
         production_targets=payload.get("production_targets") if isinstance(payload.get("production_targets"), dict) else {},
+        selected_improvement_site=payload.get("selected_improvement_site")
+        if isinstance(payload.get("selected_improvement_site"), dict)
+        else {},
     )
     if llm_result is not None:
         llm_result = _augment_llm_strategy_with_heuristic_support(llm_result, heuristic_result)
@@ -260,7 +264,13 @@ def compact_layout_improvement_payload(payload: dict[str, Any]) -> dict[str, Any
     monitor = payload.get("factory_monitor") if isinstance(payload.get("factory_monitor"), dict) else {}
     factory_sites = monitor.get("factory_sites") if isinstance(monitor.get("factory_sites"), list) else []
     logistics_links = monitor.get("logistics_links") if isinstance(monitor.get("logistics_links"), list) else []
-    layout_improvement = _layout_improvement_context(observation, factory_sites, logistics_links)
+    selected_improvement_site = _selected_improvement_site_from_payload(payload)
+    layout_improvement = _layout_improvement_context(
+        observation,
+        factory_sites,
+        logistics_links,
+        selected_improvement_site=selected_improvement_site,
+    )
     feedback = payload.get("layout_validation_feedback") if isinstance(payload.get("layout_validation_feedback"), dict) else {}
     layout_improvement = merge_sandbox_validation_feedback(layout_improvement, feedback)
     active_skill = str(payload.get("active_skill") or "")
@@ -280,6 +290,7 @@ def compact_layout_improvement_payload(payload: dict[str, Any]) -> dict[str, Any
         "active_step": payload.get("active_step"),
         "instruction": instruction,
         "production_targets": _dict_head(payload.get("production_targets"), 16),
+        "selected_improvement_site": selected_improvement_site,
         "layout_improvement": layout_improvement,
         "layout_validation_feedback": _compact_layout_validation_feedback(feedback),
         "rules": [
@@ -512,7 +523,14 @@ def try_llm_strategy_with_diagnostics(payload: dict[str, Any]) -> tuple[dict[str
     production_targets = payload.get("production_targets") if isinstance(payload.get("production_targets"), dict) else {}
     base_payload = payload.get("strategy_payload") if isinstance(payload.get("strategy_payload"), dict) else None
     if base_payload is None:
-        base_payload = make_strategy_payload(objective, observation, production_targets)
+        base_payload = make_strategy_payload(
+            objective,
+            observation,
+            production_targets,
+            selected_improvement_site=payload.get("selected_improvement_site")
+            if isinstance(payload.get("selected_improvement_site"), dict)
+            else {},
+        )
     if isinstance(payload.get("available_skills"), list):
         base_payload["available_skills"] = payload["available_skills"]
     base_payload = compact_strategy_payload(base_payload)
@@ -647,7 +665,13 @@ def compact_strategy_payload(payload: dict[str, Any]) -> dict[str, Any]:
     factory_sites = monitor.get("factory_sites") if isinstance(monitor.get("factory_sites"), list) else []
     logistics_links = monitor.get("logistics_links") if isinstance(monitor.get("logistics_links"), list) else []
     observation = payload.get("observation") if isinstance(payload.get("observation"), dict) else {}
-    layout_improvement = _layout_improvement_context(observation, factory_sites, logistics_links)
+    selected_improvement_site = _selected_improvement_site_from_payload(payload)
+    layout_improvement = _layout_improvement_context(
+        observation,
+        factory_sites,
+        logistics_links,
+        selected_improvement_site=selected_improvement_site,
+    )
     research = observation.get("research") if isinstance(observation.get("research"), dict) else {}
     technologies = research.get("technologies") if isinstance(research.get("technologies"), dict) else {}
     available_skills = payload.get("available_skills") if isinstance(payload.get("available_skills"), list) else []
@@ -660,6 +684,7 @@ def compact_strategy_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "objective": payload.get("objective"),
         "inventory": _dict_head(monitor.get("inventory") if isinstance(monitor.get("inventory"), dict) else observation.get("inventory"), 24),
         "production_targets": _dict_head(payload.get("production_targets"), 24),
+        "selected_improvement_site": selected_improvement_site,
         "target_status": [_compact_dict(item, ("item", "target_per_minute", "estimated_per_minute", "deficit_per_minute", "satisfied")) for item in target_items[:12] if isinstance(item, dict)],
         "bottlenecks": [_compact_dict(item, ("item", "reason", "stock", "estimated_per_minute", "severity", "required_by")) for item in bottlenecks[:6] if isinstance(item, dict)],
         "factory_site_summary": _factory_site_summary(factory_sites),
@@ -854,9 +879,14 @@ def _layout_improvement_context(
     observation: dict[str, Any],
     factory_sites: list[Any],
     logistics_links: list[Any],
+    *,
+    selected_improvement_site: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     issues = factory_layout_issues(observation)
     opportunities = factory_layout_opportunities(observation)
+    selected_site = sanitize_selected_improvement_site(selected_improvement_site)
+    if selected_site:
+        opportunities = [_selected_site_layout_focus(selected_site)] + opportunities
     candidates = factory_layout_simulation_candidates(observation)
     if not issues:
         issues = _layout_issues_from_monitor(factory_sites, logistics_links)
@@ -876,6 +906,7 @@ def _layout_improvement_context(
     )
     return {
         "recommended_skill": "plan_factory_site" if max(top_severity, top_score) >= 75 else None,
+        "selected_improvement_site": selected_site,
         "site_structure": _compact_layout_structure(factory_layout_structure(observation)),
         "issues": compact_issues,
         "opportunities": compact_opportunities,
@@ -890,6 +921,29 @@ def _layout_improvement_context(
             "resource-tile preservation for future miner coverage",
             "reserved belt, rail, and expansion corridors",
         ],
+    }
+
+
+def _selected_improvement_site_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    selected = sanitize_selected_improvement_site(payload.get("selected_improvement_site"))
+    if selected:
+        return selected
+    layout = payload.get("layout_improvement") if isinstance(payload.get("layout_improvement"), dict) else {}
+    return sanitize_selected_improvement_site(layout.get("selected_improvement_site"))
+
+
+def _selected_site_layout_focus(site: dict[str, Any]) -> dict[str, Any]:
+    kind = str(site.get("kind") or "factory_site")
+    item = str(site.get("item") or "")
+    item_suffix = f" for {item}" if item else ""
+    return {
+        "kind": "operator_selected_site",
+        "severity": 86,
+        "item": item or None,
+        "site_id": site.get("site_id"),
+        "detail": f"operator selected {kind}{item_suffix} as the next layout improvement focus",
+        "recommendation": "prioritize this selected site before proposing unrelated factory expansion",
+        "manual_selection": True,
     }
 
 

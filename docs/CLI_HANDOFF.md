@@ -1,10 +1,10 @@
 # Factorio Automation CLI Handoff
 
-Last updated: 2026-06-14 20:52 KST
+Last updated: 2026-06-14 21:12 KST
 Repository: `C:\Users\NEC\Documents\Factorio`
 GitHub: `https://github.com/Schwalbe262/Factorio_automation`
 Current branch: `master`
-Part 70 baseline before this handoff update: `2c41e8c Part 69: finalize placement token log`
+Part 71 baseline before this handoff update: `cf3c95d Part 70: group logistics under factory sites`
 
 ## Goal
 
@@ -243,6 +243,34 @@ Part 70 groups site logistics under the relevant factory sites in the web monito
   - `tests/test_web_dashboard.py`
   - `tests/test_planner.py`
 
+Part 71 adds manual factory-site improvement target selection:
+
+- `src/factorio_ai/site_selection.py`
+  - New runtime state file: `runtime/layout-improvement-target.json`.
+  - Stores the operator-selected factory site per objective with site id, kind, item, position, source, and timestamp.
+
+- `src/factorio_ai/web_dashboard.py`
+  - Each Factory Sites row now has an `Improve` control.
+  - Posting the control stores that site as the selected layout improvement target without overwriting production targets.
+  - The selected site renders as a `Selected` badge.
+  - Dashboard state loads the selected target and feeds it into `layout_improvement`.
+  - Codex token usage table now includes a `Tokens / hour` column computed from each row's token delta and elapsed time since the previous sample.
+
+- `src/factorio_ai/strategy.py`
+  - `make_layout_improvement_context`, `make_strategy_payload`, and `heuristic_strategy` accept `selected_improvement_site`.
+  - A selected site becomes an `operator_selected_site` layout opportunity with severity `86`, so idle strategy cycles prefer `plan_factory_site` for that target.
+
+- `src/factorio_ai/controller.py`, `src/factorio_ai/remote_slurm.py`, `src/factorio_ai/slurm_worker.py`
+  - Runtime selected site is forwarded into local/remote strategy requests and background layout-improvement requests.
+  - Compact Slurm payloads preserve `selected_improvement_site` and expose it inside `layout_improvement`.
+
+- Tests added/updated:
+  - `tests/test_site_selection.py`
+  - `tests/test_web_dashboard.py`
+  - `tests/test_strategy.py`
+  - `tests/test_slurm_worker.py`
+  - `tests/test_controller.py`
+
 ## Verification Already Run
 
 Focused tests:
@@ -336,7 +364,7 @@ $env:PYTHONPATH='src'
 pytest -q tests/test_planner.py tests/test_layout_validation.py tests/test_slurm_worker.py tests/test_web_dashboard.py
 ```
 
-Result: `138 passed`
+Result: `137 passed`
 
 Part 69 full test suite:
 
@@ -345,7 +373,7 @@ $env:PYTHONPATH='src'
 pytest -q
 ```
 
-Result: `320 passed`
+Result: `319 passed`
 
 Part 70 focused tests:
 
@@ -354,7 +382,7 @@ $env:PYTHONPATH='src'
 pytest -q tests/test_web_dashboard.py tests/test_planner.py tests/test_layout_validation.py tests/test_slurm_worker.py
 ```
 
-Result: `137 passed`
+Result: `138 passed`
 
 Part 70 full test suite:
 
@@ -363,7 +391,25 @@ $env:PYTHONPATH='src'
 pytest -q
 ```
 
-Result: `319 passed`
+Result: `320 passed`
+
+Part 71 focused tests:
+
+```powershell
+$env:PYTHONPATH='src'
+pytest -q tests/test_site_selection.py tests/test_web_dashboard.py tests/test_strategy.py tests/test_slurm_worker.py tests/test_controller.py
+```
+
+Result: `86 passed`
+
+Part 71 full test suite:
+
+```powershell
+$env:PYTHONPATH='src'
+pytest -q
+```
+
+Result: `328 passed`
 
 Part 66 token usage sample:
 
@@ -418,6 +464,24 @@ python -m factorio_ai.cli record-token-usage --tokens-used 35808664 --label "par
 ```
 
 Result: appended a final `delta_tokens=39641` row to `logs/token_usage.jsonl`; combined Part 70 rows total `148009` tokens and are read by the web dashboard token graph.
+
+Part 71 token usage sample:
+
+```powershell
+$env:PYTHONPATH='src'
+python -m factorio_ai.cli record-token-usage --tokens-used 36033651 --label "part71 manual site improvement target"
+```
+
+Result: appended `delta_tokens=224987` to `logs/token_usage.jsonl`.
+
+Part 71 final token usage sample:
+
+```powershell
+$env:PYTHONPATH='src'
+python -m factorio_ai.cli record-token-usage --tokens-used 36082114 --label "part71 manual site target final"
+```
+
+Result: appended a final `delta_tokens=48463` row to `logs/token_usage.jsonl`; combined Part 71 rows total `273450` tokens and are read by the web dashboard token graph.
 
 ## Live Smoke Checks Already Run
 
@@ -489,6 +553,24 @@ Result:
 - HTTP response did not contain the old peer heading `<h2>Logistics Links</h2>`.
 - The in-app Browser plugin was attempted again, but no `iab` browser was available, so no browser screenshot was captured.
 
+Part 71 dashboard HTTP smoke:
+
+```powershell
+$env:PYTHONPATH='src'
+python -m factorio_ai.cli web --host 127.0.0.1 --port 18894 --objective launch_rocket_program
+Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:18894/factorio?lang=en&objective=launch_rocket_program'
+```
+
+Result:
+
+- Local dashboard HTTP smoke ran on port `18894`; the validation process was stopped after the smoke.
+- HTTP status was `200`.
+- HTTP response contained `name="action" value="select_improvement_site"`.
+- HTTP response contained `site-improvement-button`.
+- HTTP response contained `Tokens / hour`.
+- HTTP response contained `token-chart`.
+- The in-app Browser plugin was attempted again, but no `iab` browser was available, so no browser screenshot was captured.
+
 ## Important Caveat: Blueprint Validation
 
 Part 66 adds a first sandbox validation path, but it is still an early validator, not a complete production simulator.
@@ -529,14 +611,14 @@ This file can later be transformed into Qwen fine-tuning examples.
 
 ## Next Implementation Priority
 
-Part 70 makes factory-site logistics easier to inspect and adds initial `prerequisite_tasks` metadata, but the dashboard still cannot choose a site as the manual improvement target and the planner still does not execute prerequisite work. Next work should close that operator loop before build execution:
+Part 71 closes the first operator loop: the dashboard can select a factory site as the manual layout-improvement target and that target reaches local/remote layout context. The planner still does not execute prerequisite work. Next work should turn selected-site context and `prerequisite_tasks` into actionable operator/debug detail before build execution:
 
-1. Add a dashboard control on each factory site to manually select that site as the next improvement target.
-2. Store the selected site target in runtime state and feed it into layout improvement/context generation so candidates can be anchored to the operator-selected site.
+1. Show the currently selected improvement site in a dedicated dashboard detail row or panel, including kind, item, position, and selected timestamp even if the site is temporarily absent from the current monitor rows.
+2. Add a live observed-state inspection command or dashboard detail that prints the selected `site_placement_search.selected_anchor`, blockers, prerequisite tasks, and top candidate anchors for operators.
 3. Convert `prerequisite_tasks` into strategy hints or deterministic prerequisite tasks: build-item mall, power pole corridor, iron/copper belt link, stock collection, or anchor reselection.
-4. Add a live observed-state inspection command or dashboard detail that prints the selected `site_placement_search.selected_anchor`, blockers, prerequisite tasks, and top candidate anchors for operators.
-5. Add a deterministic build executor only after sandbox pass, `site_prebuild_gate.status=pass`, `site_placement_search.status=found`, and required build items are available.
-6. Consider exporting `logs/layout-validation-feedback.jsonl`, `site_prebuild_gate`, `site_placement_search`, and `prerequisite_tasks` rows into Qwen fine-tuning examples later.
+4. Make layout candidate generation prefer the operator-selected site when multiple sites of the same kind/item exist, instead of only surfacing the selected site as LLM context.
+5. Add a deterministic build executor only after sandbox pass, `site_prebuild_gate.status=pass`, `site_placement_search.status=found`, selected-site context is honored, and required build items are available.
+6. Consider exporting `logs/layout-validation-feedback.jsonl`, `site_prebuild_gate`, `site_placement_search`, selected-site rows, and `prerequisite_tasks` rows into Qwen fine-tuning examples later.
 7. Rerun before any future build-ready claim:
 
 ```powershell
@@ -618,7 +700,7 @@ User wants latest Qwen models where feasible:
 - Do not exclude `n077` permanently; failures may be temporary.
 - AUTO Slurm job should request up to 3 GPUs if needed, but smaller models can run on less busy GPU resources.
 
-The LLM should receive current game state, production targets, monitor bottlenecks, site graph, layout issues, candidate validation, and failure feedback. It should not receive only a generic "how do I launch a rocket" prompt.
+The LLM should receive current game state, production targets, monitor bottlenecks, site graph, selected improvement site, layout issues, candidate validation, and failure feedback. It should not receive only a generic "how do I launch a rocket" prompt.
 
 ## Web Monitor Expectations
 
@@ -628,6 +710,7 @@ Dashboard should include:
 - Estimated production / consumption / deficits.
 - Factory sites grouped by site, not individual entities.
 - Site-to-site logistics links grouped under related factory sites, with only unmatched links shown as a fallback list.
+- Manual site selection controls for choosing the next layout-improvement target.
 - Power networks and unconnected consumers.
 - Threats / defense and recent damage.
 - LLM decision logs.

@@ -19,6 +19,11 @@ from .monitor import summarize_factory
 from .networking import dashboard_urls
 from .modless_lua import ModlessLuaController
 from .skill_registry import annotate_strategy_with_skill_status
+from .site_selection import (
+    load_selected_improvement_site,
+    save_selected_improvement_site,
+    selected_improvement_site_from_form,
+)
 from .strategy import heuristic_strategy, make_layout_improvement_context
 from .targets import TARGET_ITEMS, load_targets, parse_target_form, save_targets
 from .token_usage import token_usage_summary
@@ -117,6 +122,7 @@ TEXT: dict[str, dict[str, str]] = {
         "no_token_usage": "No Codex token usage samples recorded yet.",
         "latest_tokens": "Latest Tokens",
         "total_delta_tokens": "Turn Delta",
+        "tokens_per_hour": "Tokens / hour",
         "sample_count": "Samples",
         "last_sample": "Last Sample",
         "power_networks": "Power Networks",
@@ -183,6 +189,7 @@ TEXT: dict[str, dict[str, str]] = {
         "no_token_usage": "아직 기록된 Codex 토큰 사용량 샘플이 없습니다.",
         "latest_tokens": "최근 토큰",
         "total_delta_tokens": "증가량",
+        "tokens_per_hour": "시간당 토큰",
         "sample_count": "샘플",
         "last_sample": "최근 기록",
         "power_networks": "전력망",
@@ -303,6 +310,9 @@ TEXT["en"].update(
         "inbound": "In",
         "outbound": "Out",
         "linked": "Link",
+        "improve_site": "Improve",
+        "select_improvement_site": "Select",
+        "selected_improvement_site": "Selected",
     }
 )
 TEXT["ko"].update(
@@ -345,6 +355,9 @@ TEXT["ko"].update(
         "inbound": "\uc785\ub825",
         "outbound": "\ucd9c\ub825",
         "linked": "\uc5f0\uacb0",
+        "improve_site": "\uac1c\uc120",
+        "select_improvement_site": "\uc120\ud0dd",
+        "selected_improvement_site": "\uc120\ud0dd\ub428",
     }
 )
 
@@ -378,13 +391,9 @@ def make_dashboard_handler(cfg: AppConfig, default_objective: str) -> type[BaseH
             body = self.rfile.read(length).decode("utf-8") if length > 0 else ""
             values = parse_qs(body)
             lang = request_language(path, query, values)
-            targets = parse_target_form(values)
-            save_targets(cfg.runtime_dir, targets)
-            state = build_dashboard_state_cached(
-                cfg,
-                values.get("objective", [default_objective])[0],
-                force_refresh=True,
-            )
+            objective = values.get("objective", [default_objective])[0]
+            _handle_dashboard_post_values(cfg, objective, values)
+            state = build_dashboard_state_cached(cfg, objective, force_refresh=True)
             html = render_dashboard(state, lang=lang).encode("utf-8")
             self._send(200, html, "text/html; charset=utf-8")
 
@@ -463,6 +472,19 @@ def make_dashboard_handler(cfg: AppConfig, default_objective: str) -> type[BaseH
             self.end_headers()
 
     return FactorioDashboardHandler
+
+
+def _handle_dashboard_post_values(cfg: AppConfig, objective: str, values: dict[str, list[str]]) -> None:
+    action = str((values.get("action") or ["save_targets"])[0] or "save_targets")
+    if action == "select_improvement_site":
+        save_selected_improvement_site(
+            cfg.runtime_dir,
+            objective,
+            selected_improvement_site_from_form(values),
+        )
+        return
+    targets = parse_target_form(values)
+    save_targets(cfg.runtime_dir, targets)
 
 
 def _warm_dashboard_cache(cfg: AppConfig, objective: str) -> None:
@@ -668,6 +690,7 @@ def _web_cache_seconds() -> float:
 def build_dashboard_state(cfg: AppConfig, objective: str) -> dict[str, Any]:
     timestamp = datetime.now(timezone.utc).isoformat()
     targets = load_targets(cfg.runtime_dir, objective)
+    selected_improvement_site = load_selected_improvement_site(cfg.runtime_dir, objective)
     token_usage = token_usage_summary(cfg.log_dir)
     llm_decisions = llm_decision_summary(cfg.log_dir)
     worker_comparison = strategy_worker_comparison_summary(cfg.log_dir)
@@ -677,11 +700,19 @@ def build_dashboard_state(cfg: AppConfig, objective: str) -> dict[str, Any]:
         observation, adapter = observe_dashboard_state(cfg)
         monitor = summarize_factory(observation, objective, production_targets=targets.per_minute)
         layout_improvement = merge_sandbox_validation_feedback(
-            make_layout_improvement_context(observation),
+            make_layout_improvement_context(
+                observation,
+                selected_improvement_site=selected_improvement_site,
+            ),
             layout_validation_feedback,
         )
         strategy = annotate_strategy_with_skill_status(
-            heuristic_strategy(objective, observation, targets.per_minute),
+            heuristic_strategy(
+                objective,
+                observation,
+                targets.per_minute,
+                selected_improvement_site=selected_improvement_site,
+            ),
             runtime_dir=cfg.runtime_dir,
         )
         return {
@@ -695,6 +726,7 @@ def build_dashboard_state(cfg: AppConfig, objective: str) -> dict[str, Any]:
             "agent_marker": observation.get("agent_marker"),
             "adapter": adapter,
             "monitor": monitor,
+            "selected_improvement_site": selected_improvement_site,
             "layout_improvement": layout_improvement,
             "layout_background": layout_background,
             "layout_validation_feedback": layout_validation_feedback,
@@ -709,6 +741,7 @@ def build_dashboard_state(cfg: AppConfig, objective: str) -> dict[str, Any]:
             "updated_at": timestamp,
             "objective": objective,
             "targets": targets.to_dict(),
+            "selected_improvement_site": selected_improvement_site,
             "error": friendly_dashboard_error(exc),
             "layout_background": layout_background,
             "layout_validation_feedback": layout_validation_feedback,
@@ -843,6 +876,9 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
     execution = state.get("execution") if isinstance(state.get("execution"), dict) else {}
     layout_improvement = state.get("layout_improvement") if isinstance(state.get("layout_improvement"), dict) else {}
     layout_background = state.get("layout_background") if isinstance(state.get("layout_background"), dict) else {}
+    selected_improvement_site = (
+        state.get("selected_improvement_site") if isinstance(state.get("selected_improvement_site"), dict) else {}
+    )
 
     body = f"""
     <section class="summary">
@@ -921,7 +957,7 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
 
     <section class="panel">
       <h2>{_t(lang, "factory_sites")}</h2>
-      {_factory_site_table(factory_sites, logistics_links, lang)}
+      {_factory_site_table(factory_sites, logistics_links, selected_improvement_site, lang, state.get("objective"))}
       {_unassigned_logistics_table(factory_sites, logistics_links, lang)}
     </section>
 
@@ -1163,6 +1199,24 @@ def _page(title: str, body: str, lang: str, objective: Any = None) -> str:
       margin: 0 0 8px;
       color: #f0c46c;
       font-size: 14px;
+    }}
+    .site-improvement-form {{
+      margin: 0;
+    }}
+    .site-improvement-button {{
+      white-space: nowrap;
+      padding: 6px 9px;
+      font-size: 12px;
+    }}
+    .site-selected-badge {{
+      display: inline-block;
+      border: 1px solid #6b8f3f;
+      border-radius: 4px;
+      background: #27451c;
+      color: #fff;
+      padding: 4px 7px;
+      font-size: 12px;
+      white-space: nowrap;
     }}
     .layout-candidate-grid {{
       display: grid;
@@ -1893,7 +1947,13 @@ def _compact_json_text(value: Any) -> str:
     return text if len(text) <= 180 else text[:177] + "..."
 
 
-def _factory_site_table(rows: list[Any], links: list[Any], lang: str) -> str:
+def _factory_site_table(
+    rows: list[Any],
+    links: list[Any],
+    selected_improvement_site: dict[str, Any],
+    lang: str,
+    objective: Any,
+) -> str:
     if not rows:
         return f"<p class=\"muted\">{_t(lang, 'no_sites')}</p>"
     link_rows = [row for row in links if isinstance(row, dict)]
@@ -1912,19 +1972,20 @@ def _factory_site_table(rows: list[Any], links: list[Any], lang: str) -> str:
             f"<td>{escape(str(row.get('automation_level') or ''))}</td>"
             f"<td>{escape(', '.join(str(item) for item in machines[:5]))}</td>"
             f"<td>{_site_blueprint_copy_cell(row, lang)}</td>"
+            f"<td>{_site_improvement_select_cell(row, selected_improvement_site, lang, objective)}</td>"
             "</tr>"
         )
         if related:
             body_parts.append(
                 "<tr class=\"site-logistics-row\">"
-                f"<td colspan=\"7\">{_site_logistics_list(row, related, lang)}</td>"
+                f"<td colspan=\"8\">{_site_logistics_list(row, related, lang)}</td>"
                 "</tr>"
             )
     return (
         f"<table><thead><tr><th>{_t(lang, 'kind')}</th><th>{_t(lang, 'item')}</th>"
         f"<th>{_t(lang, 'status')}</th><th>{_t(lang, 'position')}</th>"
         f"<th>{_t(lang, 'automation')}</th><th>{_t(lang, 'machines')}</th>"
-        f"<th>{_t(lang, 'blueprint')}</th></tr></thead>"
+        f"<th>{_t(lang, 'blueprint')}</th><th>{_t(lang, 'improve_site')}</th></tr></thead>"
         f"<tbody>{''.join(body_parts)}</tbody></table>"
     )
 
@@ -2042,6 +2103,42 @@ def _unassigned_logistics_table(sites: list[Any], links: list[Any], lang: str) -
         f"<h3>{escape(_t(lang, 'unassigned_logistics'))}</h3>"
         f"{_logistics_link_table(unmatched, lang)}"
         "</div>"
+    )
+
+
+def _site_improvement_select_cell(
+    row: dict[str, Any],
+    selected_improvement_site: dict[str, Any],
+    lang: str,
+    objective: Any,
+) -> str:
+    site_id = str(row.get("site_id") or "")
+    if not site_id:
+        return ""
+    selected_site_id = str(selected_improvement_site.get("site_id") or "")
+    if selected_site_id == site_id:
+        return f"<span class=\"site-selected-badge\">{escape(_t(lang, 'selected_improvement_site'))}</span>"
+    position = _position_pair(row.get("position"))
+    position_inputs = ""
+    if position is not None:
+        position_inputs = (
+            f"<input type=\"hidden\" name=\"site_position_x\" value=\"{position[0]:.3f}\">"
+            f"<input type=\"hidden\" name=\"site_position_y\" value=\"{position[1]:.3f}\">"
+        )
+    return (
+        f"<form class=\"site-improvement-form\" method=\"post\" "
+        f"action=\"{escape(dashboard_path(lang, str(objective or '')), quote=True)}\">"
+        "<input type=\"hidden\" name=\"action\" value=\"select_improvement_site\">"
+        f"<input type=\"hidden\" name=\"lang\" value=\"{escape(lang, quote=True)}\">"
+        f"<input type=\"hidden\" name=\"objective\" value=\"{escape(str(objective or ''), quote=True)}\">"
+        f"<input type=\"hidden\" name=\"site_id\" value=\"{escape(site_id, quote=True)}\">"
+        f"<input type=\"hidden\" name=\"site_kind\" value=\"{escape(str(row.get('kind') or ''), quote=True)}\">"
+        f"<input type=\"hidden\" name=\"site_item\" value=\"{escape(str(row.get('item') or ''), quote=True)}\">"
+        f"<input type=\"hidden\" name=\"site_status\" value=\"{escape(str(row.get('status') or ''), quote=True)}\">"
+        f"<input type=\"hidden\" name=\"site_automation_level\" value=\"{escape(str(row.get('automation_level') or ''), quote=True)}\">"
+        f"{position_inputs}"
+        f"<button type=\"submit\" class=\"site-improvement-button\">{escape(_t(lang, 'select_improvement_site'))}</button>"
+        "</form>"
     )
 
 
@@ -2287,7 +2384,7 @@ def _token_usage_panel(value: Any, lang: str) -> str:
         f"{_metric(_t(lang, 'last_sample'), _format_kst_timestamp(usage.get('updated_at')))}"
         "</div>"
         f"{_token_usage_svg(samples)}"
-        f"{_token_usage_table(samples[-8:], lang)}"
+        f"{_token_usage_table(samples, lang)}"
         "</section>"
     )
 
@@ -2441,21 +2538,55 @@ def _token_usage_svg(samples: list[Any]) -> str:
 
 
 def _token_usage_table(samples: list[Any], lang: str) -> str:
-    body = "".join(
-        "<tr>"
-        f"<td>{escape(_format_kst_timestamp(row.get('timestamp')))}</td>"
-        f"<td>{escape(str(row.get('label') or ''))}</td>"
-        f"<td>{escape(_format_int(row.get('delta_tokens')))}</td>"
-        f"<td>{escape(_format_int(row.get('tokens_used')))}</td>"
-        "</tr>"
-        for row in samples
-        if isinstance(row, dict)
-    )
+    rows = [row for row in samples if isinstance(row, dict)]
+    body_parts: list[str] = []
+    for index, row in list(enumerate(rows))[-8:]:
+        previous = rows[index - 1] if index > 0 else None
+        body_parts.append(
+            "<tr>"
+            f"<td>{escape(_format_kst_timestamp(row.get('timestamp')))}</td>"
+            f"<td>{escape(str(row.get('label') or ''))}</td>"
+            f"<td>{escape(_format_int(row.get('delta_tokens')))}</td>"
+            f"<td>{escape(_format_token_rate_per_hour(row, previous))}</td>"
+            f"<td>{escape(_format_int(row.get('tokens_used')))}</td>"
+            "</tr>"
+        )
     return (
         f"<table><thead><tr><th>{_t(lang, 'updated')}</th><th>{_t(lang, 'reason')}</th>"
-        f"<th>{_t(lang, 'total_delta_tokens')}</th><th>{_t(lang, 'latest_tokens')}</th></tr></thead>"
-        f"<tbody>{body}</tbody></table>"
+        f"<th>{_t(lang, 'total_delta_tokens')}</th><th>{_t(lang, 'tokens_per_hour')}</th>"
+        f"<th>{_t(lang, 'latest_tokens')}</th></tr></thead>"
+        f"<tbody>{''.join(body_parts)}</tbody></table>"
     )
+
+
+def _format_token_rate_per_hour(row: dict[str, Any], previous: dict[str, Any] | None) -> str:
+    if not isinstance(previous, dict):
+        return ""
+    current_time = _timestamp_seconds(row.get("timestamp"))
+    previous_time = _timestamp_seconds(previous.get("timestamp"))
+    if current_time is None or previous_time is None:
+        return ""
+    elapsed_seconds = current_time - previous_time
+    if elapsed_seconds <= 0:
+        return ""
+    delta = _token_delta(row, previous)
+    if delta is None:
+        return ""
+    return _format_int(round(delta * 3600.0 / elapsed_seconds))
+
+
+def _token_delta(row: dict[str, Any], previous: dict[str, Any]) -> int | None:
+    try:
+        delta = int(row.get("delta_tokens"))
+    except (TypeError, ValueError):
+        delta = 0
+    if delta > 0:
+        return delta
+    try:
+        fallback = int(row.get("tokens_used") or 0) - int(previous.get("tokens_used") or 0)
+    except (TypeError, ValueError):
+        return None
+    return fallback if fallback > 0 else None
 
 
 def _target_form(targets: dict[str, Any], target_status: dict[str, Any], lang: str, objective: Any) -> str:

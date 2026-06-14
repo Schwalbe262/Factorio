@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -9,8 +10,11 @@ from factorio_ai.web_dashboard import (
     FACTORIO_ROUTE,
     FACTORIO_BLUEPRINT_ROUTE,
     _candidate_blueprint_response,
+    _handle_dashboard_post_values,
     _site_blueprint_response,
+    _token_usage_table,
     _token_usage_svg,
+    build_dashboard_state,
     build_dashboard_state_cached,
     clear_dashboard_state_cache,
     dashboard_path,
@@ -19,6 +23,7 @@ from factorio_ai.web_dashboard import (
     render_dashboard,
     request_language,
 )
+from factorio_ai.site_selection import load_selected_improvement_site, save_selected_improvement_site
 
 
 class WebDashboardTests(unittest.TestCase):
@@ -320,6 +325,8 @@ class WebDashboardTests(unittest.TestCase):
         self.assertIn("smelting:9,0", html)
         self.assertIn("site-logistics-row", html)
         self.assertIn("site-logistics-link", html)
+        self.assertIn('name="action" value="select_improvement_site"', html)
+        self.assertIn('name="site_id" value="build_item_mall:2,2"', html)
         self.assertNotIn("<h2>Logistics Links</h2>", html)
         self.assertIn("copper-cable assembler ratio", html)
         self.assertIn("r1jae", html)
@@ -378,6 +385,80 @@ class WebDashboardTests(unittest.TestCase):
         self.assertIn("codex_wait:bootstrap_build_item_mall", html)
         self.assertIn("compact-green-circuit-cell", html)
         self.assertIn("Reduce footprint", html)
+
+    def test_dashboard_marks_selected_improvement_site(self):
+        html = render_dashboard(
+            {
+                "ok": True,
+                "objective": "launch_rocket_program",
+                "updated_at": "now",
+                "observation_tick": 1,
+                "adapter": "test",
+                "selected_improvement_site": {"site_id": "build_item_mall:2,2"},
+                "monitor": {
+                    "factory_sites": [
+                        {
+                            "kind": "build_item_mall",
+                            "item": "transport-belt",
+                            "status": "running",
+                            "position": {"x": 2, "y": 2},
+                            "automation_level": "powered",
+                            "machines": ["assembling-machine-1"],
+                            "site_id": "build_item_mall:2,2",
+                        }
+                    ],
+                    "logistics_links": [],
+                },
+            },
+            lang="en",
+        )
+
+        self.assertIn("site-selected-badge", html)
+        self.assertIn("Selected", html)
+        self.assertNotIn('name="site_id" value="build_item_mall:2,2"', html)
+
+    def test_dashboard_post_selects_improvement_site_without_saving_targets(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cfg = SimpleNamespace(runtime_dir=Path(temp_dir), log_dir=Path(temp_dir) / "logs")
+            _handle_dashboard_post_values(
+                cfg,
+                "launch_rocket_program",
+                {
+                    "action": ["select_improvement_site"],
+                    "site_id": ["build_item_mall:2,2"],
+                    "site_kind": ["build_item_mall"],
+                    "site_item": ["transport-belt"],
+                    "site_position_x": ["2"],
+                    "site_position_y": ["2"],
+                },
+            )
+
+            selected = load_selected_improvement_site(cfg.runtime_dir, "launch_rocket_program")
+            self.assertEqual(selected["site_id"], "build_item_mall:2,2")
+            self.assertFalse((cfg.runtime_dir / "production-targets.json").exists())
+
+    def test_dashboard_state_feeds_selected_site_into_layout_context(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cfg = SimpleNamespace(runtime_dir=Path(temp_dir), log_dir=Path(temp_dir) / "logs")
+            save_selected_improvement_site(
+                cfg.runtime_dir,
+                "launch_rocket_program",
+                {"site_id": "build_item_mall:2,2", "kind": "build_item_mall", "item": "transport-belt"},
+                selected_at="2026-06-14T00:00:00+00:00",
+            )
+            with patch(
+                "factorio_ai.web_dashboard.observe_dashboard_state",
+                return_value=({"inventory": {}, "entities": [], "research": {"technologies": {}}}, "test"),
+            ):
+                state = build_dashboard_state(cfg, "launch_rocket_program")
+
+        self.assertTrue(state["ok"])
+        self.assertEqual(state["selected_improvement_site"]["site_id"], "build_item_mall:2,2")
+        self.assertEqual(
+            state["layout_improvement"]["selected_improvement_site"]["site_id"],
+            "build_item_mall:2,2",
+        )
+        self.assertEqual(state["layout_improvement"]["opportunities"][0]["kind"], "operator_selected_site")
 
     def test_factory_site_logistics_match_position_aliases(self):
         html = render_dashboard(
@@ -516,6 +597,28 @@ class WebDashboardTests(unittest.TestCase):
         self.assertIn('cx="744.0"', svg)
         self.assertIn("06-13 09:00", svg)
         self.assertIn("06-13 10:00", svg)
+
+    def test_token_usage_table_includes_hourly_rate(self):
+        html = _token_usage_table(
+            [
+                {
+                    "timestamp": "2026-06-13T00:00:00+00:00",
+                    "tokens_used": 1000,
+                    "delta_tokens": 0,
+                    "label": "start",
+                },
+                {
+                    "timestamp": "2026-06-13T00:30:00+00:00",
+                    "tokens_used": 1250,
+                    "delta_tokens": 250,
+                    "label": "ui work",
+                },
+            ],
+            "en",
+        )
+
+        self.assertIn("Tokens / hour", html)
+        self.assertIn(">500<", html)
 
     def test_connection_refused_error_is_rendered_as_operator_guidance(self):
         message = friendly_dashboard_error(ConnectionRefusedError(10061, "actively refused"))

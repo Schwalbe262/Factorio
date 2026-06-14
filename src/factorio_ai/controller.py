@@ -43,6 +43,7 @@ from .planner import (
     StarterDefenseSkill,
 )
 from .rcon import FactorioRconClient
+from .site_selection import load_selected_improvement_site
 from .skill_registry import annotate_strategy_with_skill_status
 from .strategy import heuristic_strategy, make_strategy_payload, reconcile_strategy_decision, skill_catalog_payload
 from .targets import load_targets
@@ -410,6 +411,7 @@ class FactorioController:
     def strategy_decision(self, objective: str, require_llm: bool = False) -> dict[str, Any]:
         observation = self.observe()
         production_targets = load_targets(self.cfg.runtime_dir, objective).per_minute
+        selected_improvement_site = load_selected_improvement_site(self.cfg.runtime_dir, objective)
         request_summary = strategy_request_summary(observation, production_targets)
         result: dict[str, Any] | None = None
         if self.cfg.slurm_enabled:
@@ -436,6 +438,7 @@ class FactorioController:
                         objective=objective,
                         observation=observation,
                         production_targets=production_targets,
+                        selected_improvement_site=selected_improvement_site,
                         available_skills=skill_catalog_payload(),
                         timeout_seconds=30,
                     )
@@ -468,7 +471,14 @@ class FactorioController:
             try:
                 from .slurm_worker import run_strategy_request
 
-                result = run_strategy_request(make_strategy_payload(objective, observation, production_targets))
+                result = run_strategy_request(
+                    make_strategy_payload(
+                        objective,
+                        observation,
+                        production_targets,
+                        selected_improvement_site=selected_improvement_site,
+                    )
+                )
                 record_llm_decision(
                     self.cfg.log_dir,
                     objective=objective,
@@ -490,7 +500,12 @@ class FactorioController:
                 )
                 if require_llm:
                     raise
-                result = heuristic_strategy(objective, observation, production_targets)
+                result = heuristic_strategy(
+                    objective,
+                    observation,
+                    production_targets,
+                    selected_improvement_site=selected_improvement_site,
+                )
                 result["source"] = "heuristic"
                 result["ok"] = True
                 record_llm_decision(
@@ -1487,13 +1502,23 @@ class FactorioController:
             targets = load_targets(self.cfg.runtime_dir, objective)
             monitor = summarize_factory(observation, objective, production_targets=targets.per_minute)
             validation_feedback = layout_validation_feedback_summary(self.cfg.log_dir)
+            selected_improvement_site = load_selected_improvement_site(self.cfg.runtime_dir, objective)
             self._background_layout_last_submit = now
             mode = os.getenv("FACTORIO_AI_BACKGROUND_LAYOUT_MODE", "attach").strip().lower()
             if mode in {"attach", "attached", "srun"}:
                 self._background_layout_thread_result = None
                 self._background_layout_thread = threading.Thread(
                     target=self._background_layout_attached_worker,
-                    args=(objective, active_skill, active_step, observation, targets.per_minute, monitor, validation_feedback),
+                    args=(
+                        objective,
+                        active_skill,
+                        active_step,
+                        observation,
+                        targets.per_minute,
+                        monitor,
+                        validation_feedback,
+                        selected_improvement_site,
+                    ),
                     daemon=True,
                 )
                 self._background_layout_thread.start()
@@ -1516,6 +1541,7 @@ class FactorioController:
                         "production_targets": targets.per_minute,
                         "factory_monitor": monitor,
                         "layout_validation_feedback": validation_feedback,
+                        "selected_improvement_site": selected_improvement_site,
                     },
                 }
                 self._background_layout_task_name = remote_slurm.submit_task(task)
@@ -1546,6 +1572,7 @@ class FactorioController:
         production_targets: dict[str, float],
         monitor: dict[str, Any],
         validation_feedback: dict[str, Any],
+        selected_improvement_site: dict[str, Any],
     ) -> None:
         try:
             from . import remote_slurm
@@ -1558,6 +1585,7 @@ class FactorioController:
                 production_targets=production_targets,
                 factory_monitor=monitor,
                 layout_validation_feedback=validation_feedback,
+                selected_improvement_site=selected_improvement_site,
                 timeout_seconds=int(os.getenv("FACTORIO_AI_BACKGROUND_LAYOUT_TIMEOUT_SECONDS", "180")),
                 force_attached=True,
             )

@@ -699,6 +699,7 @@ def request_strategy(
     objective: str,
     observation: dict[str, Any],
     production_targets: dict[str, float] | None = None,
+    selected_improvement_site: dict[str, Any] | None = None,
     available_skills: list[dict[str, Any]] | None = None,
     cfg: RemoteSlurmConfig | None = None,
     timeout_seconds: int | None = None,
@@ -715,7 +716,13 @@ def request_strategy(
             "objective": objective,
             "observation": observation,
             "production_targets": targets,
-            "strategy_payload": make_strategy_payload(objective, observation, targets),
+            "selected_improvement_site": selected_improvement_site or {},
+            "strategy_payload": make_strategy_payload(
+                objective,
+                observation,
+                targets,
+                selected_improvement_site=selected_improvement_site,
+            ),
             "available_skills": available_skills or [],
         },
     }
@@ -841,6 +848,7 @@ def request_layout_improvement(
     production_targets: dict[str, float] | None = None,
     factory_monitor: dict[str, Any] | None = None,
     layout_validation_feedback: dict[str, Any] | None = None,
+    selected_improvement_site: dict[str, Any] | None = None,
     cfg: RemoteSlurmConfig | None = None,
     timeout_seconds: int | None = None,
     force_attached: bool = False,
@@ -858,6 +866,7 @@ def request_layout_improvement(
             "production_targets": production_targets or {},
             "factory_monitor": factory_monitor or {},
             "layout_validation_feedback": layout_validation_feedback or {},
+            "selected_improvement_site": selected_improvement_site or {},
         },
     }
     if force_attached or _use_attached_srun(cfg):

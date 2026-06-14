@@ -12,6 +12,7 @@ from .planner import (
     factory_layout_simulation_candidates,
     factory_layout_structure,
 )
+from .site_selection import sanitize_selected_improvement_site
 
 
 KOREAN_ELECTRONIC_CIRCUIT = "\uc804\uc790\ud68c\ub85c"
@@ -308,15 +309,20 @@ def make_strategy_payload(
     objective: str,
     observation: dict[str, Any],
     production_targets: dict[str, float] | None = None,
+    selected_improvement_site: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     monitor = summarize_factory(observation, objective, production_targets=production_targets)
     return {
         "objective": objective,
         "observation": observation,
         "production_targets": dict(sorted((production_targets or {}).items())),
+        "selected_improvement_site": sanitize_selected_improvement_site(selected_improvement_site),
         "factory_monitor": monitor,
         "spatial_planning": make_spatial_planning_context(observation),
-        "layout_improvement": make_layout_improvement_context(observation),
+        "layout_improvement": make_layout_improvement_context(
+            observation,
+            selected_improvement_site=selected_improvement_site,
+        ),
         "build_item_supply": make_build_item_supply_context(observation, monitor),
         "research_planning": make_research_planning_context(observation, monitor),
         "threats": make_threat_context(observation),
@@ -334,9 +340,16 @@ def make_strategy_payload(
     }
 
 
-def make_layout_improvement_context(observation: dict[str, Any]) -> dict[str, Any]:
+def make_layout_improvement_context(
+    observation: dict[str, Any],
+    *,
+    selected_improvement_site: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     issues = factory_layout_issues(observation)
     opportunities = factory_layout_opportunities(observation)
+    selected_site = sanitize_selected_improvement_site(selected_improvement_site)
+    if selected_site:
+        opportunities = [_selected_site_layout_focus(selected_site)] + opportunities
     candidates = factory_layout_simulation_candidates(observation)
     top_severity = max(
         [int(item.get("severity") or 0) for item in issues + opportunities]
@@ -356,6 +369,7 @@ def make_layout_improvement_context(observation: dict[str, Any]) -> dict[str, An
             "do not demolish working production without a replacement path."
         ),
         "recommended_skill": "plan_factory_site" if top_severity >= 75 else None,
+        "selected_improvement_site": selected_site,
         "site_structure": factory_layout_structure(observation),
         "issues": issues,
         "opportunities": opportunities,
@@ -368,6 +382,25 @@ def make_layout_improvement_context(observation: dict[str, Any]) -> dict[str, An
             "main bus or trunk corridors before dense consumer blocks",
             "remote outpost plus rail corridor when belts or walking logistics become too long",
         ],
+    }
+
+
+def _selected_site_layout_focus(site: dict[str, Any]) -> dict[str, Any]:
+    kind = str(site.get("kind") or "factory_site")
+    item = str(site.get("item") or "")
+    item_suffix = f" for {item}" if item else ""
+    return {
+        "kind": "operator_selected_site",
+        "severity": 86,
+        "item": item or None,
+        "site_id": site.get("site_id"),
+        "detail": f"operator selected {kind}{item_suffix} as the next layout improvement focus",
+        "recommendation": (
+            "prioritize layout diagnosis, prerequisite tasks, and candidate anchors for this selected site "
+            "before proposing unrelated factory expansion"
+        ),
+        "selected_site": site,
+        "manual_selection": True,
     }
 
 
@@ -662,6 +695,7 @@ def heuristic_strategy(
     objective: str,
     observation: dict[str, Any],
     production_targets: dict[str, float] | None = None,
+    selected_improvement_site: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     objective_lower = objective.lower()
     inventory_iron = inventory_count(observation, "iron-plate")
@@ -674,7 +708,7 @@ def heuristic_strategy(
     bottlenecks = monitor.get("bottlenecks") if isinstance(monitor.get("bottlenecks"), list) else []
     power_issue = _first_power_issue(monitor)
     threats = make_threat_context(observation)
-    layout = make_layout_improvement_context(observation)
+    layout = make_layout_improvement_context(observation, selected_improvement_site=selected_improvement_site)
     layout_issues = layout.get("issues") if isinstance(layout.get("issues"), list) else []
     layout_opportunities = layout.get("opportunities") if isinstance(layout.get("opportunities"), list) else []
     top_layout_item = _top_layout_item(layout_issues, layout_opportunities)

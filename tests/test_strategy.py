@@ -2,6 +2,7 @@ import unittest
 
 from factorio_ai.strategy import (
     heuristic_strategy,
+    make_layout_improvement_context,
     make_strategy_payload,
     normalize_strategy_response,
     reconcile_strategy_decision,
@@ -364,6 +365,22 @@ class StrategyTests(unittest.TestCase):
         self.assertFalse(any(item == "iron-plate_target_deficit=15.0" for item in result["evidence"]))
         self.assertFalse(any(item == "iron-plate_estimated_per_minute=75.0" for item in result["evidence"]))
         self.assertTrue(any(item == "iron-plate_starter_usable_per_minute=0.0" for item in result["evidence"]))
+
+    def test_layout_context_includes_operator_selected_site(self):
+        selected = {
+            "site_id": "build_item_mall:2,2",
+            "kind": "build_item_mall",
+            "item": "transport-belt",
+        }
+        layout = make_layout_improvement_context(
+            {"inventory": {}, "entities": []},
+            selected_improvement_site=selected,
+        )
+
+        self.assertEqual(layout["selected_improvement_site"]["site_id"], "build_item_mall:2,2")
+        self.assertEqual(layout["recommended_skill"], "plan_factory_site")
+        self.assertEqual(layout["opportunities"][0]["kind"], "operator_selected_site")
+        self.assertEqual(layout["opportunities"][0]["site_id"], "build_item_mall:2,2")
 
     def test_reconcile_prioritizes_iron_deficit_before_copper_deficit(self):
         result = reconcile_strategy_decision(
