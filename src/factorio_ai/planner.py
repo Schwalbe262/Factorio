@@ -41,6 +41,7 @@ SMELTING_LINE_FUEL_INSERT = {
     "inserter": 8,
     "furnace": 16,
 }
+ASSEMBLER_ENTITY_NAMES = {"assembling-machine-1", "assembling-machine-2", "assembling-machine-3"}
 
 
 class FactoryLayoutImprovementSkill:
@@ -454,6 +455,7 @@ def _combined_site_blueprint(
     sites: list[dict[str, Any]],
     description: str,
 ) -> dict[str, Any] | None:
+    sites = _representative_blueprint_sites(sites)
     absolute_entities: list[dict[str, Any]] = []
     for site in sites:
         if not isinstance(site, dict) or not isinstance(site.get("position"), dict):
@@ -501,6 +503,38 @@ def _combined_site_blueprint(
         }
         normalized_entities.append(normalized)
     return _blueprint_export(label, normalized_entities, description)
+
+
+def _representative_blueprint_sites(sites: list[dict[str, Any]], max_span: float = 54.0) -> list[dict[str, Any]]:
+    positioned = [site for site in sites if isinstance(site, dict) and isinstance(site.get("position"), dict)]
+    if len(positioned) <= 1:
+        return positioned
+    footprint = _layout_footprint([site["position"] for site in positioned])
+    if max(float(footprint.get("width") or 0.0), float(footprint.get("height") or 0.0)) <= max_span:
+        return positioned
+
+    best_cluster: list[dict[str, Any]] = []
+    best_area = float("inf")
+    best_distance = float("inf")
+    for seed in positioned:
+        seed_position = seed["position"]
+        cluster = [
+            site
+            for site in positioned
+            if distance(seed_position, site["position"]) <= max_span
+        ]
+        cluster_footprint = _layout_footprint([site["position"] for site in cluster])
+        area = float(cluster_footprint.get("area") or 0.0)
+        origin_distance = distance(seed_position, {"x": 0.0, "y": 0.0})
+        if (
+            len(cluster) > len(best_cluster)
+            or (len(cluster) == len(best_cluster) and area < best_area)
+            or (len(cluster) == len(best_cluster) and area == best_area and origin_distance < best_distance)
+        ):
+            best_cluster = cluster
+            best_area = area
+            best_distance = origin_distance
+    return best_cluster or [positioned[0]]
 
 
 def _layout_issue(
@@ -628,18 +662,21 @@ def _green_circuit_layout_candidate(recipe_counts: Counter[str]) -> dict[str, An
     score = 70.0 + min(20.0, max(0.0, after_rate - before_rate) / 12.0)
     if current_cable == 0:
         score += 5.0
+    after_entities = _green_circuit_blueprint_entities(groups)
+    validation = _blueprint_operability_report(after_entities)
     return {
         "candidate_id": "green-circuit-3-cable-2-circuit-cell",
         "simulation_only": True,
         "not_applied": True,
         "source": "rate-calculator-style static recipe throughput",
-        "target_pattern": "3 copper-cable assemblers feeding 2 electronic-circuit assemblers",
+        "target_pattern": "3 copper-cable assemblers belt-feeding 2 electronic-circuit assemblers",
         "requires_build_command": True,
         "blueprint": _blueprint_export(
             "green-circuit-3-cable-2-circuit-cell",
-            _green_circuit_blueprint_entities(groups),
+            after_entities,
             "Simulation-only 3:2 green circuit cell. Validate exact input belts, power, and collision before applying.",
         ),
+        "validation": validation,
         "simulation": {
             "before": {
                 "copper_cable_assemblers": current_cable,
@@ -654,6 +691,7 @@ def _green_circuit_layout_candidate(recipe_counts: Counter[str]) -> dict[str, An
             "delta": {
                 "electronic_circuit_per_minute": round(after_rate - before_rate, 1),
                 "ratio_error_reduced": True,
+                "static_operability": validation["status"],
             },
             "score": round(min(score, 95.0), 1),
         },
@@ -690,19 +728,23 @@ def _green_circuit_blueprint_entities(groups: int) -> list[dict[str, Any]]:
     entities: list[dict[str, Any]] = []
     group_count = max(1, min(4, groups))
     for group in range(group_count):
-        y = group * 10
-        for offset in (0, 3, 6):
+        y = group * 14
+        for offset in range(-2, 11):
+            _add_entity(entities, "transport-belt", -3, y + offset, direction=SOUTH)
+            _add_entity(entities, "transport-belt", 3, y + offset, direction=SOUTH)
+            _add_entity(entities, "transport-belt", 9, y + offset, direction=SOUTH)
+        for offset in (0, 4, 8):
             _add_entity(entities, "assembling-machine-1", 0, y + offset, recipe="copper-cable")
             _add_entity(entities, "inserter", -2, y + offset, direction=EAST)
             _add_entity(entities, "inserter", 2, y + offset, direction=EAST)
-        for offset in (1, 5):
-            _add_entity(entities, "assembling-machine-1", 5, y + offset, recipe="electronic-circuit")
-            _add_entity(entities, "inserter", 3, y + offset, direction=EAST)
-            _add_entity(entities, "inserter", 7, y + offset, direction=EAST)
-        for offset in range(-1, 8):
-            _add_entity(entities, "transport-belt", -3, y + offset, direction=SOUTH)
-            _add_entity(entities, "transport-belt", 8, y + offset, direction=SOUTH)
-        _add_entity(entities, "small-electric-pole", 2, y + 3)
+        for offset in (1, 7):
+            _add_entity(entities, "assembling-machine-1", 6, y + offset, recipe="electronic-circuit")
+            _add_entity(entities, "inserter", 4, y + offset, direction=EAST)
+            _add_entity(entities, "inserter", 8, y + offset, direction=WEST)
+            _add_entity(entities, "inserter", 6, y + offset + 2, direction=SOUTH)
+            _add_entity(entities, "iron-chest", 6, y + offset + 3)
+        _add_entity(entities, "small-electric-pole", 2, y + 4)
+        _add_entity(entities, "small-electric-pole", 7, y + 4)
     return entities
 
 
@@ -967,6 +1009,149 @@ def _starter_mall_row_blueprint_entities(cell_count: int) -> list[dict[str, Any]
         if index % 2 == 0:
             _add_entity(entities, "small-electric-pole", x + 1, 1)
     return entities
+
+
+def _blueprint_operability_report(entities: list[dict[str, Any]]) -> dict[str, Any]:
+    machine_reports: list[dict[str, Any]] = []
+    errors: list[str] = []
+    warnings: list[str] = []
+    for machine in entities:
+        if not isinstance(machine, dict) or str(machine.get("name") or "") not in ASSEMBLER_ENTITY_NAMES:
+            continue
+        recipe = str(machine.get("recipe") or "")
+        if recipe not in RECIPES:
+            continue
+        inbound = _inserters_feeding_entity(machine, entities)
+        outbound = _inserters_unloading_entity(machine, entities)
+        required_inbound = 2 if recipe == "electronic-circuit" else 1
+        report = {
+            "recipe": recipe,
+            "position": machine.get("position"),
+            "input_inserters": len(inbound),
+            "output_inserters": len(outbound),
+            "status": "pass",
+        }
+        if len(inbound) < required_inbound:
+            report["status"] = "fail"
+            errors.append(f"{recipe} assembler at {_position_key(machine)} has {len(inbound)}/{required_inbound} input inserters")
+        if len(outbound) < 1:
+            report["status"] = "fail"
+            errors.append(f"{recipe} assembler at {_position_key(machine)} has no output inserter")
+        machine_reports.append(report)
+    if not machine_reports:
+        warnings.append("no recipe assemblers were found for static operability validation")
+    if errors:
+        status = "fail"
+    elif warnings:
+        status = "warning"
+    else:
+        status = "pass"
+    return {
+        "status": status,
+        "checked_machines": len(machine_reports),
+        "errors": errors,
+        "warnings": warnings,
+        "machine_reports": machine_reports[:12],
+    }
+
+
+def _inserters_feeding_entity(machine: dict[str, Any], entities: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for inserter in _blueprint_inserters(entities):
+        endpoints = _inserter_endpoints(inserter)
+        if not endpoints:
+            continue
+        pickup, drop = endpoints
+        if _point_inside_machine(drop, machine) and _point_has_source(pickup, entities, exclude=machine):
+            rows.append(inserter)
+    return rows
+
+
+def _inserters_unloading_entity(machine: dict[str, Any], entities: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for inserter in _blueprint_inserters(entities):
+        endpoints = _inserter_endpoints(inserter)
+        if not endpoints:
+            continue
+        pickup, drop = endpoints
+        if _point_inside_machine(pickup, machine) and _point_has_sink(drop, entities, exclude=machine):
+            rows.append(inserter)
+    return rows
+
+
+def _blueprint_inserters(entities: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        entity
+        for entity in entities
+        if isinstance(entity, dict) and str(entity.get("name") or "") in {"inserter", "burner-inserter", "fast-inserter"}
+    ]
+
+
+def _inserter_endpoints(entity: dict[str, Any]) -> tuple[dict[str, float], dict[str, float]] | None:
+    position = entity.get("position") if isinstance(entity.get("position"), dict) else None
+    if position is None:
+        return None
+    direction = int(entity.get("direction") or 0)
+    vectors = {
+        NORTH: (0.0, -1.0),
+        EAST: (1.0, 0.0),
+        SOUTH: (0.0, 1.0),
+        WEST: (-1.0, 0.0),
+    }
+    vector = vectors.get(direction)
+    if vector is None:
+        return None
+    x = float(position.get("x") or 0.0)
+    y = float(position.get("y") or 0.0)
+    dx, dy = vector
+    pickup = {"x": x - dx, "y": y - dy}
+    drop = {"x": x + dx, "y": y + dy}
+    return pickup, drop
+
+
+def _point_has_source(point: dict[str, float], entities: list[dict[str, Any]], *, exclude: dict[str, Any]) -> bool:
+    return any(_point_entity_match(point, entity, exclude=exclude, source=True) for entity in entities)
+
+
+def _point_has_sink(point: dict[str, float], entities: list[dict[str, Any]], *, exclude: dict[str, Any]) -> bool:
+    return any(_point_entity_match(point, entity, exclude=exclude, source=False) for entity in entities)
+
+
+def _point_entity_match(point: dict[str, float], entity: dict[str, Any], *, exclude: dict[str, Any], source: bool) -> bool:
+    if entity is exclude or not isinstance(entity, dict):
+        return False
+    name = str(entity.get("name") or "")
+    if name in {"transport-belt", "fast-transport-belt", "express-transport-belt", "wooden-chest", "iron-chest", "steel-chest"}:
+        return _point_inside_tile_entity(point, entity)
+    if name in ASSEMBLER_ENTITY_NAMES:
+        recipe = str(entity.get("recipe") or "")
+        return _point_inside_machine(point, entity) and (recipe in RECIPES or source)
+    return False
+
+
+def _point_inside_machine(point: dict[str, float], entity: dict[str, Any]) -> bool:
+    center = entity.get("position") if isinstance(entity.get("position"), dict) else None
+    if center is None:
+        return False
+    return (
+        abs(float(point.get("x") or 0.0) - float(center.get("x") or 0.0)) <= 1.5
+        and abs(float(point.get("y") or 0.0) - float(center.get("y") or 0.0)) <= 1.5
+    )
+
+
+def _point_inside_tile_entity(point: dict[str, float], entity: dict[str, Any]) -> bool:
+    center = entity.get("position") if isinstance(entity.get("position"), dict) else None
+    if center is None:
+        return False
+    return (
+        abs(float(point.get("x") or 0.0) - float(center.get("x") or 0.0)) <= 0.5
+        and abs(float(point.get("y") or 0.0) - float(center.get("y") or 0.0)) <= 0.5
+    )
+
+
+def _position_key(entity: dict[str, Any]) -> str:
+    position = entity.get("position") if isinstance(entity.get("position"), dict) else {}
+    return f"{position.get('x')},{position.get('y')}"
 
 
 def _machine_count(site: dict[str, Any], machine: str) -> int:

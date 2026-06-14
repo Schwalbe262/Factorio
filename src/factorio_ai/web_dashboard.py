@@ -284,6 +284,10 @@ TEXT["en"].update(
         "copy_blueprint": "Copy blueprint",
         "copy_before_blueprint": "Copy before",
         "copy_after_blueprint": "Copy after",
+        "validation": "Validation",
+        "validation_pass": "Pass",
+        "validation_warning": "Warning",
+        "validation_fail": "Fail",
         "copied": "Copied",
         "copy_failed": "Copy failed",
         "manual_copy": "Manual copy opened",
@@ -312,6 +316,10 @@ TEXT["ko"].update(
         "copy_blueprint": "\ube14\ub8e8\ud504\ub9b0\ud2b8 \ubcf5\uc0ac",
         "copy_before_blueprint": "\uac1c\uc120 \uc804 \ubcf5\uc0ac",
         "copy_after_blueprint": "\uac1c\uc120 \ud6c4 \ubcf5\uc0ac",
+        "validation": "\uac80\uc99d",
+        "validation_pass": "\ud1b5\uacfc",
+        "validation_warning": "\uacbd\uace0",
+        "validation_fail": "\uc2e4\ud328",
         "copied": "\ubcf5\uc0ac\ub428",
         "copy_failed": "\ubcf5\uc0ac \uc2e4\ud328",
         "manual_copy": "\uc218\ub3d9 \ubcf5\uc0ac \ucc3d \uc5f4\ub9bc",
@@ -1118,6 +1126,35 @@ def _page(title: str, body: str, lang: str, objective: Any = None) -> str:
       color: #c8d1da;
       overflow-wrap: anywhere;
     }}
+    .layout-validation {{
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      border: 1px solid #28323b;
+      border-radius: 4px;
+      padding: 7px 8px;
+      margin-bottom: 10px;
+      background: #0c0f13;
+      font-size: 12px;
+    }}
+    .layout-validation strong {{
+      white-space: nowrap;
+    }}
+    .layout-validation span {{
+      min-width: 0;
+      overflow-wrap: anywhere;
+      color: #c8d1da;
+      text-align: right;
+    }}
+    .layout-validation-pass strong {{
+      color: #78c850;
+    }}
+    .layout-validation-warning strong {{
+      color: #f0c46c;
+    }}
+    .layout-validation-fail strong {{
+      color: #ff6b6b;
+    }}
     .layout-candidate-metrics {{
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1597,6 +1634,7 @@ def _layout_candidate_table(rows: list[Any], lang: str) -> str:
             f"<span class=\"layout-candidate-score\">{escape(str(simulation.get('score') or 0))}</span>"
             "</div>"
             f"<p class=\"layout-candidate-pattern\">{escape(str(row.get('target_pattern') or ''))}</p>"
+            f"{_layout_validation_panel(row.get('validation'), lang)}"
             "<div class=\"layout-candidate-metrics\">"
             f"{_layout_metric_box(_t(lang, 'before'), simulation.get('before'))}"
             f"{_layout_metric_box(_t(lang, 'after'), simulation.get('after'))}"
@@ -1609,6 +1647,28 @@ def _layout_candidate_table(rows: list[Any], lang: str) -> str:
             "</article>"
         )
     return f"<div class=\"layout-candidate-grid\">{body}</div>"
+
+
+def _layout_validation_panel(value: Any, lang: str) -> str:
+    if not isinstance(value, dict):
+        return ""
+    status = str(value.get("status") or "warning")
+    label_key = f"validation_{status}"
+    label = _t(lang, label_key) if label_key in TEXT.get(lang, {}) else status
+    messages = value.get("errors") if status == "fail" else value.get("warnings")
+    if not isinstance(messages, list):
+        messages = []
+    detail = "; ".join(str(item) for item in messages[:2])
+    checked = value.get("checked_machines")
+    detail_text = f"{detail} " if detail else ""
+    if checked is not None:
+        detail_text += f"machines={checked}"
+    return (
+        f"<div class=\"layout-validation layout-validation-{escape(status, quote=True)}\">"
+        f"<strong>{escape(_t(lang, 'validation'))}: {escape(label)}</strong>"
+        f"<span>{escape(detail_text.strip())}</span>"
+        "</div>"
+    )
 
 
 def _layout_metric_box(title: str, value: Any) -> str:

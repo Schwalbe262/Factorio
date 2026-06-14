@@ -1086,11 +1086,89 @@ def _site_blueprint_entities(observation: dict[str, Any], site: FactorySiteEstim
         name = str(entity.get("name") or "")
         if name not in _SITE_BLUEPRINT_ENTITY_NAMES:
             continue
+        if not _site_blueprint_entity_allowed(site, entity):
+            continue
         position = _position(entity)
         if distance(position, center) > radius:
             continue
         rows.append(_entity_to_relative_blueprint_row(entity, center))
     return sorted(rows, key=lambda item: (item["position"]["y"], item["position"]["x"], item["name"]))
+
+
+def _site_blueprint_entity_allowed(site: FactorySiteEstimate, entity: dict[str, Any]) -> bool:
+    name = str(entity.get("name") or "")
+    recipe = str(entity.get("recipe") or "")
+    logistics = {
+        "transport-belt",
+        "fast-transport-belt",
+        "express-transport-belt",
+        "underground-belt",
+        "fast-underground-belt",
+        "express-underground-belt",
+        "splitter",
+        "fast-splitter",
+        "express-splitter",
+        "inserter",
+        "burner-inserter",
+        "fast-inserter",
+        "long-handed-inserter",
+        "wooden-chest",
+        "iron-chest",
+        "steel-chest",
+        "small-electric-pole",
+        "medium-electric-pole",
+        "big-electric-pole",
+        "substation",
+    }
+    if site.kind == "steam_power":
+        return name in {
+            "offshore-pump",
+            "boiler",
+            "steam-engine",
+            "pipe",
+            "pipe-to-ground",
+            "pump",
+            "transport-belt",
+            "fast-transport-belt",
+            "express-transport-belt",
+            "inserter",
+            "burner-inserter",
+            "fast-inserter",
+            "small-electric-pole",
+            "medium-electric-pole",
+        }
+    if site.kind == "plate_smelting_line":
+        return name in logistics | {
+            "burner-mining-drill",
+            "electric-mining-drill",
+            "big-mining-drill",
+            "stone-furnace",
+            "steel-furnace",
+            "electric-furnace",
+        }
+    if site.kind == "mining_patch":
+        return name in logistics | {"burner-mining-drill", "electric-mining-drill", "big-mining-drill"}
+    if site.kind == "research_lab_block":
+        return name in logistics | {"lab"}
+    if site.kind == "circuit_automation":
+        if name in logistics:
+            return True
+        return name in ASSEMBLER_SPEEDS and recipe in {"copper-cable", "electronic-circuit"}
+    if site.kind == "build_item_mall":
+        if name in logistics:
+            return True
+        return name in ASSEMBLER_SPEEDS and recipe in {
+            "transport-belt",
+            "inserter",
+            "burner-inserter",
+            "burner-mining-drill",
+            "stone-furnace",
+            "assembling-machine-1",
+            "small-electric-pole",
+        }
+    if site.kind == "assembler_cell":
+        return name in logistics or name in ASSEMBLER_SPEEDS
+    return True
 
 
 def _site_blueprint_radius(site: FactorySiteEstimate) -> float:

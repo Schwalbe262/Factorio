@@ -279,6 +279,7 @@ def compact_layout_improvement_payload(payload: dict[str, Any]) -> dict[str, Any
         "rules": [
             "Do not apply or build the design.",
             "Prefer candidates that reduce bottlenecks, footprint, transport distance, or ratio error.",
+            "Treat candidate validation failures as training feedback: explain the exact inserter, belt, power, or collision reason and do not mark it build-ready.",
             "Flag belt-capacity risk when required item flow approaches or exceeds belt capacity.",
             "The output can be used later by a deterministic executor after explicit approval.",
         ],
@@ -306,14 +307,31 @@ def normalize_layout_response(raw: dict[str, Any]) -> dict[str, Any]:
 def heuristic_layout_improvement(compact: dict[str, Any]) -> dict[str, Any]:
     layout = compact.get("layout_improvement") if isinstance(compact.get("layout_improvement"), dict) else {}
     candidates = layout.get("simulation_candidates") if isinstance(layout.get("simulation_candidates"), list) else []
-    selected = candidates[0] if candidates and isinstance(candidates[0], dict) else {}
+    valid_candidates = [
+        item
+        for item in candidates
+        if isinstance(item, dict)
+        and (
+            not isinstance(item.get("validation"), dict)
+            or item["validation"].get("status") in {None, "", "pass", "warning"}
+        )
+    ]
+    selected = valid_candidates[0] if valid_candidates else (candidates[0] if candidates and isinstance(candidates[0], dict) else {})
     simulation = selected.get("simulation") if isinstance(selected.get("simulation"), dict) else {}
+    validation = selected.get("validation") if isinstance(selected.get("validation"), dict) else {}
+    validation_errors = validation.get("errors") if isinstance(validation.get("errors"), list) else []
+    validation_warnings = validation.get("warnings") if isinstance(validation.get("warnings"), list) else []
+    validation_status = str(validation.get("status") or "")
+    risks = ["Static simulation only; exact tiles, belts, inserters, power, and collisions are not validated here."]
+    if validation_status:
+        risks.append(f"static_validation={validation_status}")
+    risks.extend(str(item) for item in (validation_errors or validation_warnings)[:4])
     return {
         "selected_candidate_id": selected.get("candidate_id"),
         "score": _int_value(simulation.get("score"), 50),
-        "reasoning": "Selected the highest-scored simulation-only layout candidate.",
+        "reasoning": "Selected the highest-scored simulation-only layout candidate that does not have a static validation failure.",
         "expected_improvements": [str(simulation.get("delta") or "layout simulation delta")],
-        "risks": ["Static simulation only; exact tiles, belts, inserters, power, and collisions are not validated here."],
+        "risks": risks,
         "next_simulation_focus": "Generate another candidate or refine the current one against real site/link data.",
         "build_ready": False,
         "no_apply": True,
@@ -875,12 +893,21 @@ def _compact_layout_item(value: dict[str, Any]) -> dict[str, Any]:
 
 def _compact_layout_candidate(value: dict[str, Any]) -> dict[str, Any]:
     simulation = value.get("simulation") if isinstance(value.get("simulation"), dict) else {}
+    validation = value.get("validation") if isinstance(value.get("validation"), dict) else {}
     return {
         "candidate_id": _compact_value(value.get("candidate_id"), string_limit=90),
         "simulation_only": bool(value.get("simulation_only")),
         "not_applied": bool(value.get("not_applied")),
         "target_pattern": _compact_value(value.get("target_pattern"), string_limit=120),
         "requires_build_command": bool(value.get("requires_build_command")),
+        "validation": {
+            "status": validation.get("status"),
+            "checked_machines": validation.get("checked_machines"),
+            "errors": _compact_value(validation.get("errors"), string_limit=140, list_limit=4),
+            "warnings": _compact_value(validation.get("warnings"), string_limit=140, list_limit=4),
+        }
+        if validation
+        else {},
         "simulation": {
             "score": simulation.get("score"),
             "before": _compact_value(simulation.get("before"), string_limit=80, list_limit=5),

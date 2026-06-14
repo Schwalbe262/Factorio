@@ -330,6 +330,7 @@ class PlannerTests(unittest.TestCase):
         candidate = next(item for item in candidates if item["candidate_id"] == "green-circuit-3-cable-2-circuit-cell")
         self.assertTrue(candidate["simulation_only"])
         self.assertTrue(candidate["not_applied"])
+        self.assertEqual(candidate["validation"]["status"], "pass")
         self.assertGreater(candidate["simulation"]["after"]["electronic_circuit_per_minute"], candidate["simulation"]["before"]["electronic_circuit_per_minute"])
         blueprint = candidate["blueprint"]
         self.assertEqual(blueprint["format"], "factorio-blueprint-string")
@@ -356,6 +357,61 @@ class PlannerTests(unittest.TestCase):
                 for entity in entities
             )
         )
+
+    def test_green_circuit_before_blueprint_does_not_pull_adjacent_power_site(self):
+        obs = base_observation()
+        obs["entities"] = [
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 910,
+                "recipe": "copper-cable",
+                "position": {"x": 10, "y": 0},
+                "electric_network_connected": True,
+                "inventories": {},
+            },
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 911,
+                "recipe": "electronic-circuit",
+                "position": {"x": 14, "y": 0},
+                "electric_network_connected": True,
+                "inventories": {},
+            },
+            {"name": "boiler", "unit_number": 930, "position": {"x": 10, "y": 10}, "inventories": {"1": {"coal": 5}}},
+            {"name": "steam-engine", "unit_number": 931, "position": {"x": 10, "y": 13}, "inventories": {}},
+            {"name": "offshore-pump", "unit_number": 932, "position": {"x": 8, "y": 10}, "inventories": {}},
+        ]
+        candidates = factory_layout_simulation_candidates(obs)
+        candidate = next(item for item in candidates if item["candidate_id"] == "green-circuit-3-cable-2-circuit-cell")
+        before_entities = decode_blueprint_string(candidate["before_blueprint"]["exchange_string"])["blueprint"]["entities"]
+        names = {entity["name"] for entity in before_entities}
+        self.assertIn("assembling-machine-1", names)
+        self.assertNotIn("boiler", names)
+        self.assertNotIn("steam-engine", names)
+        self.assertNotIn("offshore-pump", names)
+
+    def test_smelting_before_blueprint_uses_compact_representative_cluster(self):
+        obs = base_observation()
+        obs["entities"] = []
+        for base_x in (0, 400):
+            obs["entities"].extend(
+                [
+                    {"name": "burner-mining-drill", "unit_number": base_x + 1, "position": {"x": base_x - 2, "y": 0}, "inventories": {"1": {"coal": 1}}},
+                    {"name": "transport-belt", "unit_number": base_x + 2, "position": {"x": base_x, "y": 0}, "direction": 4, "inventories": {}},
+                    {"name": "transport-belt", "unit_number": base_x + 3, "position": {"x": base_x + 1, "y": 0}, "direction": 4, "inventories": {}},
+                    {"name": "burner-inserter", "unit_number": base_x + 4, "position": {"x": base_x + 2, "y": 0}, "inventories": {"1": {"coal": 1}}},
+                    {"name": "stone-furnace", "unit_number": base_x + 5, "position": {"x": base_x + 3, "y": 0}, "inventories": {"1": {"coal": 1}, "2": {"iron-ore": 1}}},
+                ]
+            )
+        obs["resources"] = [
+            {"name": "iron-ore", "position": {"x": -2, "y": 0}, "distance": 2},
+            {"name": "iron-ore", "position": {"x": 398, "y": 0}, "distance": 398},
+        ]
+        candidates = factory_layout_simulation_candidates(obs)
+        candidate = next(item for item in candidates if item["candidate_id"] == "iron-plate-parallel-smelting-columns")
+        before_entities = decode_blueprint_string(candidate["before_blueprint"]["exchange_string"])["blueprint"]["entities"]
+        xs = [float(entity["position"]["x"]) for entity in before_entities]
+        self.assertLess(max(xs) - min(xs), 80.0)
 
     def test_factory_layout_simulates_belt_capacity_bottleneck(self):
         obs = base_observation()

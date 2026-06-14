@@ -177,6 +177,12 @@ class WebDashboardTests(unittest.TestCase):
                                 "entity_count": 2,
                                 "exchange_string": "0SECRETBLUEPRINTSTRING",
                             },
+                            "validation": {
+                                "status": "pass",
+                                "checked_machines": 5,
+                                "errors": [],
+                                "warnings": [],
+                            },
                             "simulation": {
                                 "score": 88,
                                 "before": {"electronic_circuit_per_minute": 10},
@@ -310,6 +316,8 @@ class WebDashboardTests(unittest.TestCase):
         self.assertIn("copy-blueprint", html)
         self.assertIn("layout-candidate-grid", html)
         self.assertIn("layout-candidate-card", html)
+        self.assertIn("layout-validation-pass", html)
+        self.assertIn("machines=5", html)
         self.assertIn("manual-copy-overlay", html)
         self.assertIn(FACTORIO_BLUEPRINT_ROUTE, html)
         self.assertIn('data-site-id="build_item_mall:2,2"', html)
