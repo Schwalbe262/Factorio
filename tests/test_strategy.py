@@ -32,7 +32,20 @@ class StrategyTests(unittest.TestCase):
         )
         self.assertEqual(result["selected_skill"], "research_automation")
 
-    def test_rocket_goal_requests_next_executor_after_automation_researched(self):
+    def test_rocket_goal_researches_automation_before_electronic_circuit_targets(self):
+        result = heuristic_strategy(
+            "launch_rocket_program",
+            {
+                "inventory": {"iron-plate": 20, "copper-plate": 20},
+                "entities": [],
+            },
+            production_targets={"electronic-circuit": 30.0},
+        )
+
+        self.assertEqual(result["selected_skill"], "research_automation")
+        self.assertIn("automation research", result["blockers"])
+
+    def test_rocket_goal_researches_logistics_after_automation_researched(self):
         result = heuristic_strategy(
             "launch_rocket_program",
             {
@@ -41,6 +54,23 @@ class StrategyTests(unittest.TestCase):
                 "research": {
                     "technologies": {
                         "automation": {"researched": True},
+                        "logistics": {"researched": False},
+                    },
+                },
+            },
+        )
+        self.assertEqual(result["selected_skill"], "research_logistics")
+
+    def test_rocket_goal_requests_circuit_line_after_early_red_science_research(self):
+        result = heuristic_strategy(
+            "launch_rocket_program",
+            {
+                "inventory": {"iron-plate": 20},
+                "entities": [],
+                "research": {
+                    "technologies": {
+                        "automation": {"researched": True},
+                        "logistics": {"researched": True},
                     },
                 },
             },
@@ -175,7 +205,7 @@ class StrategyTests(unittest.TestCase):
         )
         self.assertEqual(result["selected_skill"], "research_logistics")
 
-    def test_electronic_circuit_bottleneck_uses_automation_when_available(self):
+    def test_electronic_circuit_bottleneck_researches_logistics_first(self):
         result = heuristic_strategy(
             "launch_rocket_program",
             {
@@ -184,6 +214,24 @@ class StrategyTests(unittest.TestCase):
                 "research": {
                     "technologies": {
                         "automation": {"researched": True},
+                        "logistics": {"researched": False},
+                    },
+                },
+            },
+            production_targets={"electronic-circuit": 20.0},
+        )
+        self.assertEqual(result["selected_skill"], "research_logistics")
+
+    def test_electronic_circuit_bottleneck_uses_automation_after_logistics(self):
+        result = heuristic_strategy(
+            "launch_rocket_program",
+            {
+                "inventory": {"iron-plate": 20, "electronic-circuit": 1},
+                "entities": [],
+                "research": {
+                    "technologies": {
+                        "automation": {"researched": True},
+                        "logistics": {"researched": True},
                     },
                 },
             },
@@ -206,7 +254,7 @@ class StrategyTests(unittest.TestCase):
             {
                 "inventory": {"iron-plate": 20, "copper-plate": 20},
                 "entities": [],
-                "research": {"technologies": {"automation": {"researched": True}}},
+                "research": {"technologies": {"automation": {"researched": True}, "logistics": {"researched": True}}},
             },
             production_targets={"electronic-circuit": 20.0},
         )
@@ -214,6 +262,54 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(result["source"], "llm")
         self.assertEqual(result["guardrail_adjusted"]["from"], "produce_electronic_circuit")
         self.assertIn("assembler-based electronic circuit production", result["blockers"])
+
+    def test_reconcile_promotes_circuit_choice_to_automation_research_before_automation(self):
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "produce_electronic_circuit",
+                "priority": 50,
+                "reason": "Need circuits.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            {
+                "inventory": {"iron-plate": 20, "copper-plate": 20},
+                "entities": [],
+                "research": {"technologies": {"automation": {"researched": False}}},
+            },
+            production_targets={"electronic-circuit": 20.0},
+        )
+
+        self.assertEqual(result["selected_skill"], "research_automation")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "produce_electronic_circuit")
+        self.assertIn("automation research", result["blockers"])
+
+    def test_reconcile_promotes_circuit_choice_to_logistics_research_before_circuit_line(self):
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "produce_electronic_circuit",
+                "priority": 50,
+                "reason": "Need circuits.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            {
+                "inventory": {"iron-plate": 20, "copper-plate": 20},
+                "entities": [],
+                "research": {"technologies": {"automation": {"researched": True}, "logistics": {"researched": False}}},
+            },
+            production_targets={"electronic-circuit": 20.0},
+        )
+
+        self.assertEqual(result["selected_skill"], "research_logistics")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "produce_electronic_circuit")
+        self.assertIn("logistics research", result["blockers"])
 
     def test_reconcile_promotes_hand_circuit_even_when_isolated_cell_exists(self):
         result = reconcile_strategy_decision(
@@ -243,7 +339,7 @@ class StrategyTests(unittest.TestCase):
                         "electric_network_connected": True,
                     },
                 ],
-                "research": {"technologies": {"automation": {"researched": True}}},
+                "research": {"technologies": {"automation": {"researched": True}, "logistics": {"researched": True}}},
             },
             production_targets={"electronic-circuit": 1000.0},
         )

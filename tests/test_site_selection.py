@@ -3,6 +3,7 @@ import tempfile
 import unittest
 
 from factorio_ai.site_selection import (
+    clear_selected_improvement_site,
     load_selected_improvement_site,
     save_selected_improvement_site,
     selected_improvement_site_from_form,
@@ -30,6 +31,19 @@ class SiteSelectionTests(unittest.TestCase):
             self.assertEqual(selected["item"], "iron-plate")
             self.assertEqual(selected["position"], {"x": 9.0, "y": 0.0})
             self.assertEqual(load_selected_improvement_site(runtime, "other_objective"), {})
+
+    def test_clears_selected_improvement_site_for_matching_objective(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            runtime = Path(temp_dir)
+            save_selected_improvement_site(
+                runtime,
+                "launch_rocket_program",
+                {"site_id": "build_item_mall:2,2"},
+                selected_at="2026-06-14T00:00:00+00:00",
+            )
+
+            self.assertTrue(clear_selected_improvement_site(runtime, "launch_rocket_program"))
+            self.assertEqual(load_selected_improvement_site(runtime, "launch_rocket_program"), {})
 
     def test_parses_selected_improvement_site_from_dashboard_form(self):
         selected = selected_improvement_site_from_form(

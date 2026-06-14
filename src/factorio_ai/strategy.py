@@ -578,6 +578,7 @@ def reconcile_strategy_decision(
     """Apply deterministic safety/feasibility guardrails to an LLM strategy choice."""
 
     selected = str(decision.get("selected_skill") or decision.get("selected_goal") or "")
+    rocket_objective = _is_rocket_objective(objective)
     remote_guardrail = decision.get("guardrail_adjusted") if isinstance(decision.get("guardrail_adjusted"), dict) else {}
     if remote_guardrail.get("from") == "plan_factory_site" and selected == remote_guardrail.get("to"):
         # Remote Slurm workers may run slightly older source. Recompute plan-site guardrails
@@ -629,6 +630,70 @@ def reconcile_strategy_decision(
         adjusted["guardrail_adjusted"] = {
             "from": selected,
             "to": "connect_coal_fuel_feed",
+            "reason": guardrail_reason,
+        }
+        return adjusted
+    if (
+        rocket_objective
+        and selected != "research_automation"
+        and not _technology_researched(observation, "automation")
+        and (
+            selected in {"produce_electronic_circuit", "automate_electronic_circuit_line"}
+            or _target_deficit_exists(objective, observation, production_targets, "electronic-circuit")
+        )
+    ):
+        adjusted = dict(decision)
+        adjusted["selected_skill"] = "research_automation"
+        adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 92)
+        original_reason = str(decision.get("reason") or "").strip()
+        guardrail_reason = (
+            "Electronic-circuit production is not the next rocket-program step until automation science "
+            "has opened Automation research."
+        )
+        adjusted["reason"] = f"{guardrail_reason} {original_reason}".strip()
+        adjusted["blockers"] = sorted(set(_string_list(decision.get("blockers")) + ["automation research"]))
+        adjusted["evidence"] = _string_list(decision.get("evidence")) + [
+            f"guardrail_adjusted_from={selected}",
+            "automation_researched=false",
+            f"automation_science_pack_total={total_item_count(observation, 'automation-science-pack')}",
+        ]
+        adjusted["expected_effect"] = "Produce automation science and feed a powered lab before committing strategy cycles to circuits."
+        adjusted["guardrail_adjusted"] = {
+            "from": selected,
+            "to": "research_automation",
+            "reason": guardrail_reason,
+        }
+        return adjusted
+    if (
+        rocket_objective
+        and selected != "research_logistics"
+        and _technology_researched(observation, "automation")
+        and not _technology_researched(observation, "logistics")
+        and (
+            selected in {"produce_electronic_circuit", "automate_electronic_circuit_line"}
+            or _target_deficit_exists(objective, observation, production_targets, "electronic-circuit")
+        )
+    ):
+        adjusted = dict(decision)
+        adjusted["selected_skill"] = "research_logistics"
+        adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 91)
+        original_reason = str(decision.get("reason") or "").strip()
+        guardrail_reason = (
+            "Red-science Logistics research should come before committing the rocket-program loop "
+            "to a green-circuit production line."
+        )
+        adjusted["reason"] = f"{guardrail_reason} {original_reason}".strip()
+        adjusted["blockers"] = sorted(set(_string_list(decision.get("blockers")) + ["logistics research"]))
+        adjusted["evidence"] = _string_list(decision.get("evidence")) + [
+            f"guardrail_adjusted_from={selected}",
+            "automation_researched=true",
+            "logistics_researched=false",
+            f"automation_science_pack_total={total_item_count(observation, 'automation-science-pack')}",
+        ]
+        adjusted["expected_effect"] = "Feed the powered lab with automation science to unlock early logistics before circuit-line expansion."
+        adjusted["guardrail_adjusted"] = {
+            "from": selected,
+            "to": "research_logistics",
             "reason": guardrail_reason,
         }
         return adjusted
@@ -698,6 +763,7 @@ def heuristic_strategy(
     selected_improvement_site: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     objective_lower = objective.lower()
+    rocket_objective = _is_rocket_objective(objective)
     inventory_iron = inventory_count(observation, "iron-plate")
     total_iron = total_item_count(observation, "iron-plate")
     total_copper = total_item_count(observation, "copper-plate")
@@ -766,7 +832,7 @@ def heuristic_strategy(
             expected_effect="Expand or connect the electric network before adding more electric machines.",
         ).to_dict()
 
-    if ("rocket" in objective_lower or KOREAN_ROCKET in objective) and total_iron < 10:
+    if rocket_objective and total_iron < 10:
         return StrategicDecision(
             selected_skill="produce_iron_plate",
             priority=96,
@@ -779,6 +845,39 @@ def heuristic_strategy(
     if bottlenecks:
         first = bottlenecks[0] if isinstance(bottlenecks[0], dict) else {}
         item = str(first.get("item") or "")
+        if rocket_objective and not automation_researched and item == "electronic-circuit":
+            return StrategicDecision(
+                selected_skill="research_automation",
+                priority=93,
+                reason=(
+                    "Automation science and Automation research unlock the first practical tech step; "
+                    "delay green-circuit work until the lab path is moving."
+                ),
+                evidence=[f"automation_science_pack_total={science}", "automation_researched=false"],
+                blockers=["automation research"],
+                expected_effect="Produce automation science and feed a powered lab before committing strategy cycles to circuits.",
+            ).to_dict()
+        if (
+            rocket_objective
+            and automation_researched
+            and item == "electronic-circuit"
+            and not _technology_researched(observation, "logistics")
+        ):
+            return StrategicDecision(
+                selected_skill="research_logistics",
+                priority=92,
+                reason=(
+                    "Electronic circuits are bottlenecked, but early red-science research should unlock Logistics "
+                    "before the rocket-program loop commits to a circuit line."
+                ),
+                evidence=[
+                    f"automation_science_pack_total={science}",
+                    "automation_researched=true",
+                    "logistics_researched=false",
+                ],
+                blockers=["logistics research"],
+                expected_effect="Feed the powered lab with automation science to unlock early logistics before circuit-line expansion.",
+            ).to_dict()
         skill = _skill_for_bottleneck_item(item, observation)
         if skill:
             return StrategicDecision(
@@ -818,7 +917,7 @@ def heuristic_strategy(
             expected_effect="Begin green circuit production.",
         ).to_dict()
 
-    if "rocket" in objective_lower or KOREAN_ROCKET in objective:
+    if rocket_objective:
         if total_iron < 10:
             return StrategicDecision(
                 selected_skill="produce_iron_plate",
@@ -838,6 +937,20 @@ def heuristic_strategy(
                 expected_effect="Build and feed a powered lab to unlock assembling-machine-1.",
             ).to_dict()
         if not _circuit_automation_ready(observation):
+            if not _technology_researched(observation, "logistics"):
+                return StrategicDecision(
+                    selected_skill="research_logistics",
+                    priority=88,
+                    reason="Automation is researched; use red science to unlock Logistics before building the first green circuit line.",
+                    evidence=[
+                        f"automation_science_pack_total={science}",
+                        f"electronic_circuit_total={circuits}",
+                        "automation_researched=true",
+                        "logistics_researched=false",
+                    ],
+                    blockers=["logistics research"],
+                    expected_effect="Feed the powered lab with automation science to unlock early logistics before circuit-line expansion.",
+                ).to_dict()
             return StrategicDecision(
                 selected_skill="automate_electronic_circuit_line",
                 priority=85,
@@ -929,6 +1042,10 @@ def _string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return [str(value)] if value else []
     return [str(item) for item in value]
+
+
+def _is_rocket_objective(objective: str) -> bool:
+    return "rocket" in objective.lower() or KOREAN_ROCKET in objective
 
 
 def _first_power_issue(monitor: dict[str, Any]) -> dict[str, Any] | None:
@@ -1113,8 +1230,8 @@ def _target_deficit_priority(item: str) -> int:
     return {
         "iron-plate": 100,
         "copper-plate": 90,
+        "automation-science-pack": 85,
         "electronic-circuit": 80,
-        "automation-science-pack": 70,
     }.get(item, 50)
 
 

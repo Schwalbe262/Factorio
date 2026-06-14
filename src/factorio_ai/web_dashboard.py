@@ -20,6 +20,7 @@ from .networking import dashboard_urls
 from .modless_lua import ModlessLuaController
 from .skill_registry import annotate_strategy_with_skill_status
 from .site_selection import (
+    clear_selected_improvement_site,
     load_selected_improvement_site,
     save_selected_improvement_site,
     selected_improvement_site_from_form,
@@ -313,6 +314,8 @@ TEXT["en"].update(
         "improve_site": "Improve",
         "select_improvement_site": "Select",
         "selected_improvement_site": "Selected",
+        "selected_improvement_target": "Selected improvement target",
+        "clear_improvement_site": "Cancel",
     }
 )
 TEXT["ko"].update(
@@ -358,6 +361,8 @@ TEXT["ko"].update(
         "improve_site": "\uac1c\uc120",
         "select_improvement_site": "\uc120\ud0dd",
         "selected_improvement_site": "\uc120\ud0dd\ub428",
+        "selected_improvement_target": "\uc120\ud0dd\ub41c \uac1c\uc120 \ub300\uc0c1",
+        "clear_improvement_site": "\ucde8\uc18c",
     }
 )
 
@@ -482,6 +487,9 @@ def _handle_dashboard_post_values(cfg: AppConfig, objective: str, values: dict[s
             objective,
             selected_improvement_site_from_form(values),
         )
+        return
+    if action == "clear_improvement_site":
+        clear_selected_improvement_site(cfg.runtime_dir, objective)
         return
     targets = parse_target_form(values)
     save_targets(cfg.runtime_dir, targets)
@@ -957,6 +965,7 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
 
     <section class="panel">
       <h2>{_t(lang, "factory_sites")}</h2>
+      {_selected_improvement_site_panel(selected_improvement_site, lang, state.get("objective"))}
       {_factory_site_table(factory_sites, logistics_links, selected_improvement_site, lang, state.get("objective"))}
       {_unassigned_logistics_table(factory_sites, logistics_links, lang)}
     </section>
@@ -1203,7 +1212,32 @@ def _page(title: str, body: str, lang: str, objective: Any = None) -> str:
     .site-improvement-form {{
       margin: 0;
     }}
+    .site-improvement-summary {{
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px 12px;
+      margin: 0 0 12px;
+      padding: 8px 0 10px;
+      border-bottom: 1px solid #2a3036;
+      color: #d8e0e8;
+      font-size: 13px;
+    }}
+    .site-improvement-selected {{
+      display: inline-flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+    }}
     .site-improvement-button {{
+      white-space: nowrap;
+      padding: 6px 9px;
+      font-size: 12px;
+    }}
+    .site-improvement-cancel-button {{
+      border-color: #46515c;
+      background: #2a3036;
+      color: #d8e0e8;
       white-space: nowrap;
       padding: 6px 9px;
       font-size: 12px;
@@ -1217,6 +1251,9 @@ def _page(title: str, body: str, lang: str, objective: Any = None) -> str:
       padding: 4px 7px;
       font-size: 12px;
       white-space: nowrap;
+    }}
+    .site-selected-row td {{
+      background: rgba(79, 143, 47, 0.12);
     }}
     .layout-candidate-grid {{
       display: grid;
@@ -1947,6 +1984,32 @@ def _compact_json_text(value: Any) -> str:
     return text if len(text) <= 180 else text[:177] + "..."
 
 
+def _selected_improvement_site_panel(selected_improvement_site: dict[str, Any], lang: str, objective: Any) -> str:
+    if not selected_improvement_site:
+        return ""
+    details: list[str] = []
+    kind = str(selected_improvement_site.get("kind") or "")
+    item = str(selected_improvement_site.get("item") or "")
+    position_text = _position_text(selected_improvement_site.get("position"))
+    selected_at = _format_kst_timestamp(selected_improvement_site.get("selected_at"))
+    if kind:
+        details.append(f"<span>{escape(kind)}</span>")
+    if item:
+        details.append(_item_cell(item))
+    if position_text:
+        details.append(f"<span>{escape(position_text)}</span>")
+    if selected_at:
+        details.append(f"<span>{escape(selected_at)}</span>")
+    return (
+        "<div class=\"site-improvement-summary\">"
+        f"<strong>{escape(_t(lang, 'selected_improvement_target'))}</strong>"
+        f"<span class=\"site-selected-badge\">{escape(_t(lang, 'selected_improvement_site'))}</span>"
+        f"{''.join(details)}"
+        f"{_clear_improvement_site_form(lang, objective)}"
+        "</div>"
+    )
+
+
 def _factory_site_table(
     rows: list[Any],
     links: list[Any],
@@ -1963,8 +2026,10 @@ def _factory_site_table(
             continue
         machines = row.get("machines") if isinstance(row.get("machines"), list) else []
         related = _site_logistics_links(row, link_rows)
+        is_selected = str(selected_improvement_site.get("site_id") or "") == str(row.get("site_id") or "")
+        row_class = " class=\"site-selected-row\"" if is_selected else ""
         body_parts.append(
-            "<tr>"
+            f"<tr{row_class}>"
             f"<td>{escape(str(row.get('kind') or ''))}</td>"
             f"<td>{_item_cell(str(row.get('item') or '')) if row.get('item') else ''}</td>"
             f"<td>{escape(str(row.get('status') or ''))}</td>"
@@ -2117,7 +2182,12 @@ def _site_improvement_select_cell(
         return ""
     selected_site_id = str(selected_improvement_site.get("site_id") or "")
     if selected_site_id == site_id:
-        return f"<span class=\"site-selected-badge\">{escape(_t(lang, 'selected_improvement_site'))}</span>"
+        return (
+            "<div class=\"site-improvement-selected\">"
+            f"<span class=\"site-selected-badge\">{escape(_t(lang, 'selected_improvement_site'))}</span>"
+            f"{_clear_improvement_site_form(lang, objective)}"
+            "</div>"
+        )
     position = _position_pair(row.get("position"))
     position_inputs = ""
     if position is not None:
@@ -2138,6 +2208,18 @@ def _site_improvement_select_cell(
         f"<input type=\"hidden\" name=\"site_automation_level\" value=\"{escape(str(row.get('automation_level') or ''), quote=True)}\">"
         f"{position_inputs}"
         f"<button type=\"submit\" class=\"site-improvement-button\">{escape(_t(lang, 'select_improvement_site'))}</button>"
+        "</form>"
+    )
+
+
+def _clear_improvement_site_form(lang: str, objective: Any) -> str:
+    return (
+        f"<form class=\"site-improvement-form\" method=\"post\" "
+        f"action=\"{escape(dashboard_path(lang, str(objective or '')), quote=True)}\">"
+        "<input type=\"hidden\" name=\"action\" value=\"clear_improvement_site\">"
+        f"<input type=\"hidden\" name=\"lang\" value=\"{escape(lang, quote=True)}\">"
+        f"<input type=\"hidden\" name=\"objective\" value=\"{escape(str(objective or ''), quote=True)}\">"
+        f"<button type=\"submit\" class=\"site-improvement-cancel-button\">{escape(_t(lang, 'clear_improvement_site'))}</button>"
         "</form>"
     )
 

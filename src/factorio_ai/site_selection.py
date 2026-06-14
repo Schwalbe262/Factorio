@@ -52,6 +52,19 @@ def save_selected_improvement_site(
     return path
 
 
+def clear_selected_improvement_site(runtime_dir: Path, objective: str = "launch_rocket_program") -> bool:
+    path = selected_improvement_site_path(runtime_dir)
+    if not path.exists():
+        return False
+    if not load_selected_improvement_site(runtime_dir, objective):
+        return False
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return False
+    return True
+
+
 def selected_improvement_site_from_form(values: dict[str, list[str]]) -> dict[str, Any]:
     site_id = _first(values, "site_id", "improvement_site_id")
     site: dict[str, Any] = {

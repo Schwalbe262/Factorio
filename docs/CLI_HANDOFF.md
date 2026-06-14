@@ -1,10 +1,10 @@
 # Factorio Automation CLI Handoff
 
-Last updated: 2026-06-14 21:12 KST
+Last updated: 2026-06-14 22:18 KST
 Repository: `C:\Users\NEC\Documents\Factorio`
 GitHub: `https://github.com/Schwalbe262/Factorio_automation`
 Current branch: `master`
-Part 71 baseline before this handoff update: `cf3c95d Part 70: group logistics under factory sites`
+Part 72 baseline before this handoff update: `92915d2 Part 71: select manual site improvement targets`
 
 ## Goal
 
@@ -270,6 +270,29 @@ Part 71 adds manual factory-site improvement target selection:
   - `tests/test_strategy.py`
   - `tests/test_slurm_worker.py`
   - `tests/test_controller.py`
+
+Part 72 improves the operator UX and early research priority:
+
+- `src/factorio_ai/site_selection.py`
+  - Adds `clear_selected_improvement_site(...)` for removing the runtime layout-improvement target.
+
+- `src/factorio_ai/web_dashboard.py`
+  - Selected Factory Sites now render a dedicated "Selected improvement target" summary above the table.
+  - The selected row is visually highlighted.
+  - The selected row and summary include a `Cancel` control that clears `runtime/layout-improvement-target.json`.
+  - The old no-feedback behavior after pressing Select is fixed: after selection, the panel, row highlight, selected badge, and cancel action are visible.
+
+- `src/factorio_ai/targets.py`
+  - `automation-science-pack` is listed before `electronic-circuit` in target forms and default rocket-program target order.
+
+- `src/factorio_ai/strategy.py`
+  - Rocket-program strategy now keeps early red-science research ahead of green-circuit line work.
+  - If Automation is not researched, electronic-circuit deficits are redirected to `research_automation`.
+  - If Automation is researched but Logistics is not, electronic-circuit deficits are redirected to `research_logistics`.
+  - Self-adjusting guardrail logs are avoided when the strategy is already `research_automation` or `research_logistics`.
+
+- `tests/test_site_selection.py`, `tests/test_web_dashboard.py`, `tests/test_strategy.py`, `tests/test_slurm_worker.py`, `tests/test_targets.py`
+  - Cover selection clearing, visible cancel UX, target ordering, red-science-first strategy, and Slurm guardrail behavior.
 
 ## Verification Already Run
 
@@ -571,6 +594,59 @@ Result:
 - HTTP response contained `token-chart`.
 - The in-app Browser plugin was attempted again, but no `iab` browser was available, so no browser screenshot was captured.
 
+Part 72 verification:
+
+```powershell
+$env:PYTHONPATH='src'
+pytest -q tests\test_strategy.py tests\test_targets.py tests\test_site_selection.py tests\test_web_dashboard.py
+```
+
+Result: `58 passed`
+
+```powershell
+$env:PYTHONPATH='src'
+pytest -q
+```
+
+Result: `336 passed`
+
+Live strategy check:
+
+```powershell
+$env:PYTHONPATH='src'
+python -m factorio_ai.cli no-mod-strategy --objective launch_rocket_program
+```
+
+Result:
+
+- `selected_skill`: `research_logistics`
+- `priority`: `92`
+- evidence included `automation_science_pack_total=0`, `automation_researched=true`, `logistics_researched=false`
+- This confirms the current loop now prioritizes red-science Logistics research before the green-circuit line.
+
+Live web restart/check:
+
+- Web process restarted on port `18889`.
+- Current observed web command after restart: `python -m factorio_ai.cli web --host 0.0.0.0 --port 18889 --objective launch_rocket_program`
+- Local URL checked: `http://127.0.0.1:18889/factorio?lang=en&objective=launch_rocket_program`
+- External URL checked: `http://27.115.156.173:8787/factorio?lang=en&objective=launch_rocket_program`
+- Both returned HTTP `200`.
+- Both contained the select action and `research_logistics`.
+- Target form order check passed: `automation-science-pack` input appears before `electronic-circuit`.
+
+Selection/cancel smoke:
+
+- Selected the first site via POST: `circuit_automation:group:mixed:20.5,-799.5`
+- Response showed `Selected improvement target`, `clear_improvement_site`, and `<tr class="site-selected-row">`.
+- Then POSTed `clear_improvement_site`; response no longer showed the selected panel or clear action.
+- Runtime target file was left cleared after the smoke.
+- One server log `ValueError: selected improvement site requires a site_id` was caused by an earlier malformed manual smoke command with an empty `site_id`; ignore it unless it recurs from real UI usage.
+
+Browser verification:
+
+- The in-app Browser plugin was attempted again.
+- `iab` was unavailable (`Browser is not available: iab`), so no visual screenshot/click automation was captured.
+
 ## Important Caveat: Blueprint Validation
 
 Part 66 adds a first sandbox validation path, but it is still an early validator, not a complete production simulator.
@@ -611,22 +687,24 @@ This file can later be transformed into Qwen fine-tuning examples.
 
 ## Next Implementation Priority
 
-Part 71 closes the first operator loop: the dashboard can select a factory site as the manual layout-improvement target and that target reaches local/remote layout context. The planner still does not execute prerequisite work. Next work should turn selected-site context and `prerequisite_tasks` into actionable operator/debug detail before build execution:
+Part 72 changes current strategy priority to `research_logistics`. The next CLI session should continue from the live red-science/research path before returning to green-circuit expansion:
 
-1. Show the currently selected improvement site in a dedicated dashboard detail row or panel, including kind, item, position, and selected timestamp even if the site is temporarily absent from the current monitor rows.
-2. Add a live observed-state inspection command or dashboard detail that prints the selected `site_placement_search.selected_anchor`, blockers, prerequisite tasks, and top candidate anchors for operators.
-3. Convert `prerequisite_tasks` into strategy hints or deterministic prerequisite tasks: build-item mall, power pole corridor, iron/copper belt link, stock collection, or anchor reselection.
-4. Make layout candidate generation prefer the operator-selected site when multiple sites of the same kind/item exist, instead of only surfacing the selected site as LLM context.
-5. Add a deterministic build executor only after sandbox pass, `site_prebuild_gate.status=pass`, `site_placement_search.status=found`, selected-site context is honored, and required build items are available.
-6. Consider exporting `logs/layout-validation-feedback.jsonl`, `site_prebuild_gate`, `site_placement_search`, selected-site rows, and `prerequisite_tasks` rows into Qwen fine-tuning examples later.
-7. Rerun before any future build-ready claim:
+1. Run or inspect `research_logistics` in the live no-mod game. Current strategy evidence says `automation_science_pack_total=0`, `automation_researched=true`, and `logistics_researched=false`.
+2. If `research_logistics` stalls, inspect `ResearchTechnologySkill`/`AutomationScienceSkill` for red science production, lab placement, lab feeding, power, and coal fuel prerequisites.
+3. Keep green-circuit line work behind early red-science research unless Logistics is researched or the research path reports a concrete prerequisite blocker.
+4. Continue the selected-site operator loop after research is moving: add live observed-state detail for selected `site_placement_search.selected_anchor`, blockers, prerequisite tasks, and top candidate anchors.
+5. Convert `prerequisite_tasks` into strategy hints or deterministic prerequisite tasks: build-item mall, power pole corridor, iron/copper belt link, stock collection, or anchor reselection.
+6. Make layout candidate generation prefer the operator-selected site when multiple sites of the same kind/item exist, instead of only surfacing the selected site as LLM context.
+7. Add a deterministic build executor only after sandbox pass, `site_prebuild_gate.status=pass`, `site_placement_search.status=found`, selected-site context is honored, and required build items are available.
+8. Consider exporting `logs/layout-validation-feedback.jsonl`, `site_prebuild_gate`, `site_placement_search`, selected-site rows, and `prerequisite_tasks` rows into Qwen fine-tuning examples later.
+9. Rerun before any future build-ready claim:
 
 ```powershell
 $env:PYTHONPATH='src'
 python -m factorio_ai.cli validate-layout-candidate --candidate-id green-circuit-3-cable-2-circuit-cell --variant after --ticks 3600 --player r1jae
 ```
 
-8. Only mark the candidate build-ready after sandbox validation, site pre-build gate, deterministic site placement checks, and prerequisite tasks all pass.
+10. Only mark the candidate build-ready after sandbox validation, site pre-build gate, deterministic site placement checks, and prerequisite tasks all pass.
 
 ## Core Commands
 

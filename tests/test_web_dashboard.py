@@ -414,7 +414,12 @@ class WebDashboardTests(unittest.TestCase):
         )
 
         self.assertIn("site-selected-badge", html)
+        self.assertIn("site-selected-row", html)
+        self.assertIn("Selected improvement target", html)
         self.assertIn("Selected", html)
+        self.assertIn('name="action" value="clear_improvement_site"', html)
+        self.assertIn("site-improvement-cancel-button", html)
+        self.assertIn(">Cancel<", html)
         self.assertNotIn('name="site_id" value="build_item_mall:2,2"', html)
 
     def test_dashboard_post_selects_improvement_site_without_saving_targets(self):
@@ -435,6 +440,27 @@ class WebDashboardTests(unittest.TestCase):
 
             selected = load_selected_improvement_site(cfg.runtime_dir, "launch_rocket_program")
             self.assertEqual(selected["site_id"], "build_item_mall:2,2")
+            self.assertFalse((cfg.runtime_dir / "production-targets.json").exists())
+
+    def test_dashboard_post_clears_improvement_site_without_saving_targets(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cfg = SimpleNamespace(runtime_dir=Path(temp_dir), log_dir=Path(temp_dir) / "logs")
+            save_selected_improvement_site(
+                cfg.runtime_dir,
+                "launch_rocket_program",
+                {"site_id": "build_item_mall:2,2", "kind": "build_item_mall"},
+                selected_at="2026-06-14T00:00:00+00:00",
+            )
+
+            _handle_dashboard_post_values(
+                cfg,
+                "launch_rocket_program",
+                {
+                    "action": ["clear_improvement_site"],
+                },
+            )
+
+            self.assertEqual(load_selected_improvement_site(cfg.runtime_dir, "launch_rocket_program"), {})
             self.assertFalse((cfg.runtime_dir / "production-targets.json").exists())
 
     def test_dashboard_state_feeds_selected_site_into_layout_context(self):

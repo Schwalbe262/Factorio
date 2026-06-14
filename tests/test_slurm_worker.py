@@ -69,7 +69,7 @@ class SlurmWorkerTests(unittest.TestCase):
             self.assertEqual(result["selected_skill"], "expand_iron_smelting")
             self.assertEqual(result["source"], "heuristic")
 
-    def test_strategy_request_guardrail_promotes_hand_circuit_llm_choice(self):
+    def test_strategy_request_guardrail_promotes_hand_circuit_llm_choice_to_red_science_research(self):
         with patch(
             "factorio_ai.slurm_worker.call_llm_json_with_diagnostics",
             return_value=(
@@ -95,11 +95,11 @@ class SlurmWorkerTests(unittest.TestCase):
                     "production_targets": {"electronic-circuit": 20.0},
                     "available_skills": [],
                 }
-            )
+        )
 
         self.assertEqual(result["source"], "llm")
-        self.assertEqual(result["selected_skill"], "automate_electronic_circuit_line")
-        self.assertEqual(result["guardrail_adjusted"]["to"], "automate_electronic_circuit_line")
+        self.assertEqual(result["selected_skill"], "research_logistics")
+        self.assertEqual(result["guardrail_adjusted"]["to"], "research_logistics")
 
     def test_strategy_request_uses_precomputed_strategy_payload_for_prompt(self):
         with patch(
