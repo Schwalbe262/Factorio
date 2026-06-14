@@ -316,6 +316,11 @@ Key constraints to preserve:
   The active wait is persisted in `runtime/codex-wait.json`; autopilot emits a
   layout heartbeat from that file at cycle start, even if the next strategy
   call fails.
+  For one-shot blocked strategy runs, either start
+  `run_factorio_no_mod_codex_wait_layout_loop.bat` or set
+  `FACTORIO_AI_CODEX_WAIT_LAYOUT_AUTOSTART=1` so the blocked command launches
+  the no-mod wait loop automatically. The loop stops only after the wait state
+  is cleared when the missing executor is implemented.
 - Site placement matters. Avoid building early factories on top of resource
   patches when possible.
 - Logistic links should be between sites, not individual belts.

@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from factorio_ai.config import AppConfig
-from factorio_ai.controller import FactorioController, RunSummary, StrategyStepSummary
+from factorio_ai.controller import FactorioController, ModlessFactorioController, RunSummary, StrategyStepSummary
 from factorio_ai.llm_log import llm_decision_log_path
 from factorio_ai.models import PlannerDecision
 
@@ -197,6 +197,74 @@ class ControllerTests(unittest.TestCase):
         self.assertTrue(wait_state["active"])
         self.assertEqual(wait_state["selected_skill"], "future_build_item_skill")
         self.assertEqual(wait_state["active_skill"], "codex_wait:future_build_item_skill")
+
+    def test_blocked_no_mod_strategy_can_autostart_codex_wait_layout_loop(self):
+        observation = {
+            "tick": 1,
+            "inventory": {},
+            "entities": [
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 11,
+                    "recipe": "transport-belt",
+                    "position": {"x": 1, "y": 1},
+                    "electric_network_connected": True,
+                    "inventories": {},
+                }
+            ],
+            "resources": [],
+            "research": {"technologies": {}},
+        }
+
+        class DummyProcess:
+            pid = 4321
+
+        class FakeController(ModlessFactorioController):
+            def observe(self):
+                return observation
+
+            def strategy_decision(self, objective, require_llm=False):
+                return {
+                    "selected_skill": "future_build_item_skill",
+                    "reason": "needs missing build item executor",
+                    "skill_status": {
+                        "name": "future_build_item_skill",
+                        "implemented": False,
+                        "executor": None,
+                        "codex_required": True,
+                    },
+                }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cfg = replace(make_test_config(Path(temp_dir)), slurm_enabled=True)
+            controller = FakeController(cfg)
+            with (
+                patch.dict(
+                    "os.environ",
+                    {
+                        "FACTORIO_AI_CODEX_WAIT_LAYOUT_AUTOSTART": "1",
+                        "FACTORIO_AI_BACKGROUND_LAYOUT_INTERVAL_SECONDS": "0",
+                        "FACTORIO_AI_BACKGROUND_LAYOUT_MODE": "queue",
+                    },
+                ),
+                patch("factorio_ai.controller.subprocess.Popen", return_value=DummyProcess()) as popen,
+                patch("factorio_ai.remote_slurm.submit_task", return_value="layout-blocked.json"),
+            ):
+                summary = controller.run_strategy_step("launch_rocket_program")
+
+            process_state = json.loads((cfg.runtime_dir / "codex-wait-layout-loop.json").read_text(encoding="utf-8"))
+            rows = [
+                json.loads(line)
+                for line in (cfg.log_dir / "layout-improvement-background.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+
+        self.assertFalse(summary.ok)
+        popen.assert_called_once()
+        command = popen.call_args.args[0]
+        self.assertIn("run-no-mod-codex-wait-layout-loop", command)
+        self.assertEqual(process_state["pid"], 4321)
+        self.assertIn("run-no-mod-codex-wait-layout-loop", process_state["command"])
+        self.assertTrue(any(row["event"] == "layout_codex_wait_loop_started" for row in rows))
 
     def test_autopilot_pulses_layout_work_while_codex_wait_state_is_active(self):
         observation = {

@@ -441,6 +441,16 @@ $env:PYTHONPATH='src'
 python -m factorio_ai.cli run-no-mod-codex-wait-layout-loop --objective launch_rocket_program
 ```
 
+On Windows the same no-custom-mod loop is available as:
+
+```bat
+run_factorio_no_mod_codex_wait_layout_loop.bat
+```
+
+For one-shot strategy commands, set `FACTORIO_AI_CODEX_WAIT_LAYOUT_AUTOSTART=1` if the
+blocked-step command should start that loop automatically. Continuous autopilot already pulses
+the wait state at the start of every cycle.
+
 This command keeps submitting simulation-only layout-improvement work until the Codex wait state is
 cleared. Use `--cycles N` for a bounded smoke test. Results are appended to
 `logs/layout-improvement-background.jsonl` and are shown in the dashboard's Background Layout Work

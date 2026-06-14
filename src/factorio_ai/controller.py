@@ -5,12 +5,14 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import subprocess
+import sys
 import threading
 import time
 from typing import Any
 
 from .llm_log import record_llm_decision, strategy_request_summary
-from .config import AppConfig
+from .config import AppConfig, REPO_ROOT
 from .models import (
     ActionValidationError,
     PlannerDecision,
@@ -938,6 +940,7 @@ class FactorioController:
         }
         with path.open("w", encoding="utf-8") as file:
             json.dump(payload, file, ensure_ascii=False, indent=2)
+        self._maybe_start_codex_wait_layout_loop(objective)
 
     def _read_codex_wait_state(self) -> dict[str, Any]:
         path = self._codex_wait_path()
@@ -959,6 +962,101 @@ class FactorioController:
         self.cfg.runtime_dir.mkdir(parents=True, exist_ok=True)
         with self._codex_wait_path().open("w", encoding="utf-8") as file:
             json.dump(state, file, ensure_ascii=False, indent=2)
+
+    def _codex_wait_layout_process_path(self) -> Path:
+        return self.cfg.runtime_dir / "codex-wait-layout-loop.json"
+
+    def _codex_wait_layout_cli_command(self) -> str:
+        return "run-codex-wait-layout-loop"
+
+    def _maybe_start_codex_wait_layout_loop(self, objective: str) -> None:
+        if not self.cfg.slurm_enabled:
+            return
+        if os.getenv("FACTORIO_AI_CODEX_WAIT_LAYOUT_AUTOSTART", "0").lower() not in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }:
+            return
+
+        self.cfg.runtime_dir.mkdir(parents=True, exist_ok=True)
+        process_path = self._codex_wait_layout_process_path()
+        existing = _read_json_file(process_path)
+        existing_pid = _int_or_none(existing.get("pid")) if isinstance(existing, dict) else None
+        if existing_pid and _pid_is_running(existing_pid):
+            self._write_background_layout_log(
+                {
+                    "event": "layout_codex_wait_loop_already_running",
+                    "pid": existing_pid,
+                    "objective": objective,
+                }
+            )
+            return
+
+        sleep_seconds = os.getenv(
+            "FACTORIO_AI_CODEX_WAIT_LAYOUT_SLEEP_SECONDS",
+            os.getenv("FACTORIO_AI_BACKGROUND_LAYOUT_INTERVAL_SECONDS", "20"),
+        )
+        command = [
+            sys.executable,
+            "-m",
+            "factorio_ai.cli",
+            self._codex_wait_layout_cli_command(),
+            "--objective",
+            objective,
+            "--cycles",
+            "0",
+            "--sleep-seconds",
+            sleep_seconds,
+        ]
+        env = os.environ.copy()
+        src_path = str(REPO_ROOT / "src")
+        current_pythonpath = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = src_path if not current_pythonpath else f"{src_path}{os.pathsep}{current_pythonpath}"
+
+        kwargs: dict[str, Any] = {
+            "cwd": str(REPO_ROOT),
+            "env": env,
+            "stdin": subprocess.DEVNULL,
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL,
+        }
+        if os.name == "nt":
+            kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(
+                subprocess,
+                "DETACHED_PROCESS",
+                0,
+            )
+        try:
+            proc = subprocess.Popen(command, **kwargs)
+        except Exception as exc:  # noqa: BLE001
+            self._write_background_layout_log(
+                {
+                    "event": "layout_codex_wait_loop_start_failed",
+                    "objective": objective,
+                    "command": command,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
+            return
+
+        state = {
+            "pid": proc.pid,
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "objective": objective,
+            "command": command,
+        }
+        with process_path.open("w", encoding="utf-8") as file:
+            json.dump(state, file, ensure_ascii=False, indent=2)
+        self._write_background_layout_log(
+            {
+                "event": "layout_codex_wait_loop_started",
+                "pid": proc.pid,
+                "objective": objective,
+                "command": command,
+            }
+        )
 
     def _maybe_progress_codex_wait_layout(self, objective: str, *, phase: str = "cycle_start") -> None:
         state = self._read_codex_wait_state()
@@ -1365,6 +1463,36 @@ class ModlessFactorioController(FactorioController):
         time.sleep(max(0.05, ticks / 60.0))
         return response
 
+    def _codex_wait_layout_cli_command(self) -> str:
+        return "run-no-mod-codex-wait-layout-loop"
+
 
 def _timestamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+
+
+def _read_json_file(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _pid_is_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True

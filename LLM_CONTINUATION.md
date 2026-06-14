@@ -329,12 +329,19 @@ Environment:
 $env:FACTORIO_AI_BACKGROUND_LAYOUT_ENABLED="1"
 $env:FACTORIO_AI_BACKGROUND_LAYOUT_MODE="attach"
 $env:FACTORIO_AI_BACKGROUND_LAYOUT_INTERVAL_SECONDS="20"
+$env:FACTORIO_AI_CODEX_WAIT_LAYOUT_AUTOSTART="1"
 ```
 
 Log:
 
 ```text
 logs/layout-improvement-background.jsonl
+```
+
+Windows helper:
+
+```text
+run_factorio_no_mod_codex_wait_layout_loop.bat
 ```
 
 The result must contain `no_apply: true`. It is only a simulation or review.
