@@ -46,6 +46,8 @@ POWER_CONNECTOR_NAMES = {"small-electric-pole", "medium-electric-pole", "big-ele
 PROTECTED_RESOURCE_NAMES = {"iron-ore", "copper-ore", "coal", "stone", "uranium-ore"}
 SITE_GATE_INPUT_STOCK_FALLBACK = 20
 SITE_GATE_LOCAL_LOGISTICS_RADIUS = 96.0
+SITE_PLACEMENT_SEARCH_STEP = 8
+SITE_PLACEMENT_SEARCH_RADIUS = 48
 
 
 class FactoryLayoutImprovementSkill:
@@ -662,8 +664,14 @@ def _site_prebuild_gate(
     required_inputs: tuple[str, ...],
     all_sites: list[dict[str, Any]],
     preferred_sites: list[dict[str, Any]],
+    anchor: dict[str, float] | None = None,
+    anchor_source: str | None = None,
 ) -> dict[str, Any]:
-    anchor, anchor_source = _site_gate_anchor(observation, preferred_sites)
+    if anchor is None:
+        anchor, anchor_source = _site_gate_anchor(observation, preferred_sites)
+    else:
+        anchor = {"x": round(float(anchor.get("x") or 0.0), 1), "y": round(float(anchor.get("y") or 0.0), 1)}
+        anchor_source = anchor_source or "explicit_anchor"
     planned_entities = _absolute_blueprint_entities(blueprint_entities, anchor)
     checks = {
         "build_items": _site_gate_build_item_check(observation, blueprint_entities),
@@ -705,6 +713,146 @@ def _site_prebuild_gate(
         "checks": checks,
         "errors": errors[:8],
         "warnings": warnings[:8],
+    }
+
+
+def _site_placement_search(
+    observation: dict[str, Any],
+    blueprint_entities: list[dict[str, Any]],
+    *,
+    target_item: str,
+    required_inputs: tuple[str, ...],
+    all_sites: list[dict[str, Any]],
+    preferred_sites: list[dict[str, Any]],
+) -> dict[str, Any]:
+    seed_anchor, seed_source = _site_gate_anchor(observation, preferred_sites)
+    evaluated: list[dict[str, Any]] = []
+    for anchor in _site_placement_anchor_candidates(seed_anchor):
+        gate = _site_prebuild_gate(
+            observation,
+            blueprint_entities,
+            target_item=target_item,
+            required_inputs=required_inputs,
+            all_sites=all_sites,
+            preferred_sites=preferred_sites,
+            anchor=anchor,
+            anchor_source="placement_search_candidate",
+        )
+        score = _site_placement_score(seed_anchor, gate)
+        evaluated.append(
+            {
+                "score": score,
+                "distance_from_seed": round(distance(seed_anchor, gate["anchor"]), 1),
+                "placement_ready": _site_gate_placement_ready(gate),
+                "gate": gate,
+            }
+        )
+    evaluated.sort(
+        key=lambda row: (
+            bool(row.get("placement_ready")),
+            float(row.get("score") or 0.0),
+            -float(row.get("distance_from_seed") or 0.0),
+        ),
+        reverse=True,
+    )
+    best = evaluated[0] if evaluated else {}
+    selected_gate = dict(best.get("gate") if isinstance(best.get("gate"), dict) else {})
+    if selected_gate:
+        selected_gate["anchor_source"] = "placement_search"
+    placement_ready = bool(best.get("placement_ready"))
+    output = {
+        "status": "found" if placement_ready else "blocked",
+        "summary": (
+            f"found candidate build anchor at {_position_key({'position': selected_gate.get('anchor', {})})}"
+            if placement_ready and selected_gate
+            else "no searched anchor clears collision, resource, power, and input logistics checks"
+        ),
+        "seed_anchor": seed_anchor,
+        "seed_source": seed_source,
+        "selected_anchor": selected_gate.get("anchor") if selected_gate else None,
+        "selected_score": round(float(best.get("score") or 0.0), 1) if best else 0.0,
+        "evaluated_anchors": len(evaluated),
+        "search_radius": SITE_PLACEMENT_SEARCH_RADIUS,
+        "search_step": SITE_PLACEMENT_SEARCH_STEP,
+        "top_candidates": [_site_placement_search_row(row) for row in evaluated[:6]],
+        "_selected_gate": selected_gate,
+    }
+    return output
+
+
+def _site_placement_anchor_candidates(seed_anchor: dict[str, float]) -> list[dict[str, float]]:
+    seen: set[tuple[float, float]] = set()
+    anchors: list[dict[str, float]] = []
+    step = max(1, SITE_PLACEMENT_SEARCH_STEP)
+    radius = max(step, SITE_PLACEMENT_SEARCH_RADIUS)
+    for dx in range(-radius, radius + 1, step):
+        for dy in range(-radius, radius + 1, step):
+            if (dx * dx + dy * dy) ** 0.5 > radius:
+                continue
+            x = round(float(seed_anchor.get("x") or 0.0) + dx, 1)
+            y = round(float(seed_anchor.get("y") or 0.0) + dy, 1)
+            key = (x, y)
+            if key in seen:
+                continue
+            seen.add(key)
+            anchors.append({"x": x, "y": y})
+    anchors.sort(key=lambda anchor: distance(seed_anchor, anchor))
+    return anchors
+
+
+def _site_placement_score(seed_anchor: dict[str, float], gate: dict[str, Any]) -> float:
+    checks = gate.get("checks") if isinstance(gate.get("checks"), dict) else {}
+    weights = {
+        "collision": 35.0,
+        "resource_preservation": 25.0,
+        "power_reach": 20.0,
+        "input_logistics": 20.0,
+        "build_items": 8.0,
+    }
+    score = 0.0
+    for check_name, weight in weights.items():
+        check = checks.get(check_name) if isinstance(checks.get(check_name), dict) else {}
+        if check.get("status") == "pass":
+            score += weight
+        elif check.get("status") == "warning":
+            score += weight * 0.45
+    anchor = gate.get("anchor") if isinstance(gate.get("anchor"), dict) else seed_anchor
+    score -= min(24.0, distance(seed_anchor, anchor) / 2.0)
+    errors = gate.get("errors") if isinstance(gate.get("errors"), list) else []
+    score -= min(12.0, len(errors) * 1.5)
+    return round(score, 3)
+
+
+def _site_gate_placement_ready(gate: dict[str, Any]) -> bool:
+    checks = gate.get("checks") if isinstance(gate.get("checks"), dict) else {}
+    for check_name in ("collision", "resource_preservation", "power_reach", "input_logistics"):
+        check = checks.get(check_name) if isinstance(checks.get(check_name), dict) else {}
+        if check.get("status") != "pass":
+            return False
+    return True
+
+
+def _site_placement_search_row(row: dict[str, Any]) -> dict[str, Any]:
+    gate = row.get("gate") if isinstance(row.get("gate"), dict) else {}
+    checks = gate.get("checks") if isinstance(gate.get("checks"), dict) else {}
+    passed: list[str] = []
+    failed: list[str] = []
+    for check_name, check in checks.items():
+        if not isinstance(check, dict):
+            continue
+        if check.get("status") == "pass":
+            passed.append(str(check_name))
+        elif check.get("status") == "fail":
+            failed.append(str(check_name))
+    return {
+        "anchor": gate.get("anchor"),
+        "score": round(float(row.get("score") or 0.0), 1),
+        "distance_from_seed": row.get("distance_from_seed"),
+        "placement_ready": bool(row.get("placement_ready")),
+        "gate_status": gate.get("status"),
+        "passed_checks": passed,
+        "failed_checks": failed,
+        "errors": (gate.get("errors") if isinstance(gate.get("errors"), list) else [])[:3],
     }
 
 
@@ -1035,6 +1183,24 @@ def _site_gate_missing_summary(prefix: str, missing: dict[str, int]) -> str:
     return f"{prefix}: {', '.join(parts)}{suffix}"
 
 
+def _layout_candidate_build_ready_blockers(
+    *,
+    sandbox_validation: dict[str, Any] | None,
+    site_gate: dict[str, Any],
+    placement_search: dict[str, Any],
+) -> list[str]:
+    blockers: list[str] = []
+    if not isinstance(sandbox_validation, dict) or sandbox_validation.get("status") != "pass":
+        blockers.append("sandbox validation feedback must pass before build-ready")
+    if site_gate.get("status") != "pass" or not site_gate.get("build_ready"):
+        blockers.extend(str(item) for item in site_gate.get("errors", [])[:4] if item)
+    if placement_search.get("status") != "found":
+        summary = str(placement_search.get("summary") or "deterministic placement search did not find a ready anchor")
+        if summary not in blockers:
+            blockers.append(summary)
+    return blockers[:8]
+
+
 def _green_circuit_layout_candidate(
     recipe_counts: Counter[str],
     observation: dict[str, Any],
@@ -1054,7 +1220,7 @@ def _green_circuit_layout_candidate(
         score += 5.0
     after_entities = _green_circuit_blueprint_entities(groups)
     validation = _blueprint_operability_report(after_entities)
-    site_gate = _site_prebuild_gate(
+    placement_search = _site_placement_search(
         observation,
         after_entities,
         target_item="electronic-circuit",
@@ -1062,6 +1228,16 @@ def _green_circuit_layout_candidate(
         all_sites=all_sites,
         preferred_sites=current_circuit_sites,
     )
+    site_gate = placement_search.pop("_selected_gate", None)
+    if not isinstance(site_gate, dict) or not site_gate:
+        site_gate = _site_prebuild_gate(
+            observation,
+            after_entities,
+            target_item="electronic-circuit",
+            required_inputs=("iron-plate", "copper-plate"),
+            all_sites=all_sites,
+            preferred_sites=current_circuit_sites,
+        )
     return {
         "candidate_id": "green-circuit-3-cable-2-circuit-cell",
         "simulation_only": True,
@@ -1070,7 +1246,12 @@ def _green_circuit_layout_candidate(
         "target_pattern": "3 copper-cable assemblers belt-feeding 2 electronic-circuit assemblers",
         "requires_build_command": True,
         "requires_site_prebuild_gate": True,
-        "build_ready": bool(site_gate.get("build_ready")),
+        "build_ready": False,
+        "build_ready_blockers": _layout_candidate_build_ready_blockers(
+            sandbox_validation=None,
+            site_gate=site_gate,
+            placement_search=placement_search,
+        ),
         "blueprint": _blueprint_export(
             "green-circuit-3-cable-2-circuit-cell",
             after_entities,
@@ -1078,6 +1259,7 @@ def _green_circuit_layout_candidate(
         ),
         "validation": validation,
         "site_prebuild_gate": site_gate,
+        "site_placement_search": placement_search,
         "simulation": {
             "before": {
                 "copper_cable_assemblers": current_cable,
@@ -1098,7 +1280,7 @@ def _green_circuit_layout_candidate(
         },
         "notes": [
             "Simulation assumes assembling-machine-1 speed and recipe max rates.",
-            "Real build still needs tile collision, power, inserter, belt, and input-source validation.",
+            "Real build still needs sandbox pass, site placement, power, build-item, and input-source validation.",
         ],
     }
 

@@ -333,6 +333,11 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(candidate["validation"]["status"], "pass")
         self.assertTrue(candidate["requires_site_prebuild_gate"])
         self.assertFalse(candidate["build_ready"])
+        self.assertIn("sandbox validation feedback must pass", candidate["build_ready_blockers"][0])
+        placement = candidate["site_placement_search"]
+        self.assertEqual(placement["status"], "blocked")
+        self.assertIn("selected_anchor", placement)
+        self.assertGreater(placement["evaluated_anchors"], 1)
         site_gate = candidate["site_prebuild_gate"]
         self.assertEqual(site_gate["status"], "fail")
         self.assertFalse(site_gate["build_ready"])
@@ -341,7 +346,7 @@ class PlannerTests(unittest.TestCase):
         self.assertIn("power_reach", site_gate["checks"])
         self.assertIn("input_logistics", site_gate["checks"])
         self.assertEqual(site_gate["checks"]["build_items"]["status"], "fail")
-        self.assertEqual(site_gate["checks"]["collision"]["status"], "fail")
+        self.assertEqual(site_gate["checks"]["collision"]["status"], "pass")
         self.assertEqual(site_gate["checks"]["power_reach"]["status"], "fail")
         self.assertEqual(site_gate["checks"]["input_logistics"]["status"], "fail")
         self.assertGreater(candidate["simulation"]["after"]["electronic_circuit_per_minute"], candidate["simulation"]["before"]["electronic_circuit_per_minute"])
@@ -380,6 +385,58 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(inserter_directions[(4.0, 1.0)], 12)
         self.assertEqual(inserter_directions[(8.0, 1.0)], 4)
         self.assertEqual(inserter_directions[(6.0, 3.0)], 0)
+
+    def test_green_circuit_placement_search_finds_clear_powered_anchor(self):
+        obs = base_observation()
+        obs["inventory"].update(
+            {
+                "assembling-machine-1": 5,
+                "inserter": 12,
+                "iron-chest": 2,
+                "small-electric-pole": 2,
+                "transport-belt": 39,
+                "iron-plate": 20,
+                "copper-plate": 20,
+            }
+        )
+        obs["resources"] = []
+        obs["entities"] = [
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 910,
+                "recipe": "electronic-circuit",
+                "position": {"x": 10, "y": 0},
+                "electric_network_connected": True,
+                "inventories": {},
+            },
+            {
+                "name": "big-electric-pole",
+                "unit_number": 920,
+                "position": {"x": 12, "y": 22},
+                "electric_network_connected": True,
+                "inventories": {},
+            },
+        ]
+
+        candidates = factory_layout_simulation_candidates(obs)
+        candidate = next(item for item in candidates if item["candidate_id"] == "green-circuit-3-cable-2-circuit-cell")
+
+        self.assertFalse(candidate["build_ready"])
+        self.assertEqual(candidate["build_ready_blockers"], ["sandbox validation feedback must pass before build-ready"])
+        placement = candidate["site_placement_search"]
+        self.assertEqual(placement["status"], "found")
+        self.assertEqual(placement["selected_anchor"], {"x": 10.0, "y": 8.0})
+        self.assertTrue(placement["top_candidates"][0]["placement_ready"])
+        site_gate = candidate["site_prebuild_gate"]
+        self.assertEqual(site_gate["status"], "pass")
+        self.assertTrue(site_gate["build_ready"])
+        self.assertEqual({key: row["status"] for key, row in site_gate["checks"].items()}, {
+            "build_items": "pass",
+            "collision": "pass",
+            "resource_preservation": "pass",
+            "power_reach": "pass",
+            "input_logistics": "pass",
+        })
 
     def test_green_circuit_before_blueprint_does_not_pull_adjacent_power_site(self):
         obs = base_observation()

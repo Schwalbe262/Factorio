@@ -243,7 +243,37 @@ def merge_sandbox_validation_feedback(layout: dict[str, Any], feedback: dict[str
             candidate["sandbox_validation"] = sandbox_validation
             candidate["sandbox_validation_timestamp"] = row.get("timestamp")
             candidate["sandbox_validation_lesson"] = row.get("lesson")
+            candidate["build_ready"] = _merged_candidate_build_ready(candidate)
+            candidate["build_ready_blockers"] = _merged_candidate_build_ready_blockers(candidate)
     return output
+
+
+def _merged_candidate_build_ready(candidate: dict[str, Any]) -> bool:
+    sandbox = candidate.get("sandbox_validation") if isinstance(candidate.get("sandbox_validation"), dict) else {}
+    site_gate = candidate.get("site_prebuild_gate") if isinstance(candidate.get("site_prebuild_gate"), dict) else {}
+    placement = candidate.get("site_placement_search") if isinstance(candidate.get("site_placement_search"), dict) else {}
+    return (
+        sandbox.get("status") == "pass"
+        and site_gate.get("status") == "pass"
+        and bool(site_gate.get("build_ready"))
+        and placement.get("status") == "found"
+    )
+
+
+def _merged_candidate_build_ready_blockers(candidate: dict[str, Any]) -> list[str]:
+    blockers: list[str] = []
+    sandbox = candidate.get("sandbox_validation") if isinstance(candidate.get("sandbox_validation"), dict) else {}
+    site_gate = candidate.get("site_prebuild_gate") if isinstance(candidate.get("site_prebuild_gate"), dict) else {}
+    placement = candidate.get("site_placement_search") if isinstance(candidate.get("site_placement_search"), dict) else {}
+    if sandbox.get("status") != "pass":
+        blockers.append("sandbox validation feedback must pass before build-ready")
+    if site_gate.get("status") != "pass" or not site_gate.get("build_ready"):
+        blockers.extend(str(item) for item in site_gate.get("errors", [])[:4] if item)
+    if placement.get("status") != "found":
+        summary = str(placement.get("summary") or "deterministic placement search did not find a ready anchor")
+        if summary not in blockers:
+            blockers.append(summary)
+    return blockers[:8]
 
 
 def normalized_variant(value: str) -> str:

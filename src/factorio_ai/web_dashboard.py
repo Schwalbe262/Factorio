@@ -288,9 +288,12 @@ TEXT["en"].update(
         "validation": "Validation",
         "sandbox_validation": "Sandbox",
         "prebuild_gate": "Pre-build",
+        "placement_search": "Placement",
         "validation_pass": "Pass",
         "validation_warning": "Warning",
         "validation_fail": "Fail",
+        "placement_found": "Found",
+        "placement_blocked": "Blocked",
         "copied": "Copied",
         "copy_failed": "Copy failed",
         "manual_copy": "Manual copy opened",
@@ -322,9 +325,12 @@ TEXT["ko"].update(
         "validation": "\uac80\uc99d",
         "sandbox_validation": "\uc0cc\ub4dc\ubc15\uc2a4",
         "prebuild_gate": "\uc0ac\uc804 \ube4c\ub4dc",
+        "placement_search": "\ubc30\uce58",
         "validation_pass": "\ud1b5\uacfc",
         "validation_warning": "\uacbd\uace0",
         "validation_fail": "\uc2e4\ud328",
+        "placement_found": "\ucc3e\uc74c",
+        "placement_blocked": "\ucc28\ub2e8",
         "copied": "\ubcf5\uc0ac\ub428",
         "copy_failed": "\ubcf5\uc0ac \uc2e4\ud328",
         "manual_copy": "\uc218\ub3d9 \ubcf5\uc0ac \ucc3d \uc5f4\ub9bc",
@@ -1648,6 +1654,7 @@ def _layout_candidate_table(rows: list[Any], lang: str) -> str:
             f"{_layout_validation_panel(row.get('validation'), lang)}"
             f"{_layout_validation_panel(row.get('sandbox_validation'), lang, title_key='sandbox_validation')}"
             f"{_layout_validation_panel(row.get('site_prebuild_gate'), lang, title_key='prebuild_gate')}"
+            f"{_layout_placement_panel(row.get('site_placement_search'), lang)}"
             "<div class=\"layout-candidate-metrics\">"
             f"{_layout_metric_box(_t(lang, 'before'), simulation.get('before'))}"
             f"{_layout_metric_box(_t(lang, 'after'), simulation.get('after'))}"
@@ -1697,6 +1704,30 @@ def _layout_validation_panel(value: Any, lang: str, *, title_key: str = "validat
         f"<div class=\"layout-validation layout-validation-{escape(status, quote=True)}\">"
         f"<strong>{escape(_t(lang, title_key))}: {escape(label)}</strong>"
         f"<span>{escape(detail_text.strip())}</span>"
+        "</div>"
+    )
+
+
+def _layout_placement_panel(value: Any, lang: str) -> str:
+    if not isinstance(value, dict):
+        return ""
+    status = str(value.get("status") or "blocked")
+    css_status = "pass" if status == "found" else "fail"
+    label_key = f"placement_{status}"
+    label = _t(lang, label_key) if label_key in TEXT.get(lang, {}) else status
+    summary = str(value.get("summary") or "")
+    selected_anchor = value.get("selected_anchor")
+    anchor_text = _position_text(selected_anchor) if isinstance(selected_anchor, dict) else ""
+    evaluated = value.get("evaluated_anchors")
+    parts = [summary]
+    if anchor_text:
+        parts.append(f"anchor={anchor_text}")
+    if evaluated is not None:
+        parts.append(f"evaluated={evaluated}")
+    return (
+        f"<div class=\"layout-validation layout-validation-{escape(css_status, quote=True)}\">"
+        f"<strong>{escape(_t(lang, 'placement_search'))}: {escape(label)}</strong>"
+        f"<span>{escape('; '.join(part for part in parts if part))}</span>"
         "</div>"
     )
 

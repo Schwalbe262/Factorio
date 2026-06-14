@@ -1,10 +1,10 @@
 # Factorio Automation CLI Handoff
 
-Last updated: 2026-06-14 20:21 KST
+Last updated: 2026-06-14 20:35 KST
 Repository: `C:\Users\NEC\Documents\Factorio`
 GitHub: `https://github.com/Schwalbe262/Factorio_automation`
 Current branch: `master`
-Part 68 baseline before this handoff update: `346fe9e Part 67: fix green circuit sandbox validation`
+Part 69 baseline before this handoff update: `2e25a2b Part 68: gate sandbox layouts before build`
 
 ## Goal
 
@@ -200,6 +200,33 @@ Part 68 adds a site-specific pre-build gate for sandbox-proven layouts:
   - `tests/test_slurm_worker.py`
   - `tests/test_web_dashboard.py`
 
+Part 69 adds deterministic placement search on top of the Part 68 pre-build gate:
+
+- `src/factorio_ai/planner.py`
+  - Adds `site_placement_search` for `green-circuit-3-cable-2-circuit-cell`.
+  - The search evaluates a grid of nearby anchors around the current circuit-site centroid, scores anchors by collision, protected-resource preservation, power reach, input logistics, build items, and distance from seed.
+  - The selected `site_prebuild_gate` now uses the best searched anchor instead of blindly using the current site centroid.
+  - `site_placement_search.status` is `found` when the best anchor clears collision/resource/power/input logistics checks, even if build items or sandbox feedback still block build-ready.
+  - Candidate-level `build_ready` now remains `false` until sandbox feedback is pass, site gate is pass, and placement search is found.
+  - `build_ready_blockers` explicitly records missing sandbox feedback, missing build items, power reach failures, input logistics failures, and blocked placement.
+
+- `src/factorio_ai/layout_validation.py`
+  - `merge_sandbox_validation_feedback` now recomputes candidate `build_ready` and `build_ready_blockers` when sandbox feedback is attached.
+  - A candidate becomes build-ready only after sandbox pass plus site/pre-build/placement pass.
+
+- `src/factorio_ai/slurm_worker.py`
+  - Compact layout payload now includes `site_placement_search` and `build_ready_blockers`.
+  - Heuristic risks include `site_placement_search=<status>` and the blockers so LLM layout review can distinguish "bad anchor" from "missing build items".
+
+- `src/factorio_ai/web_dashboard.py`
+  - Candidate cards now show a `Placement` row with search status, selected anchor, and evaluated anchor count.
+
+- Tests updated:
+  - `tests/test_planner.py`
+  - `tests/test_layout_validation.py`
+  - `tests/test_slurm_worker.py`
+  - `tests/test_web_dashboard.py`
+
 ## Verification Already Run
 
 Focused tests:
@@ -286,6 +313,24 @@ pytest -q
 
 Result: `317 passed`
 
+Part 69 focused tests:
+
+```powershell
+$env:PYTHONPATH='src'
+pytest -q tests/test_planner.py tests/test_layout_validation.py tests/test_slurm_worker.py tests/test_web_dashboard.py
+```
+
+Result: `137 passed`
+
+Part 69 full test suite:
+
+```powershell
+$env:PYTHONPATH='src'
+pytest -q
+```
+
+Result: `319 passed`
+
 Part 66 token usage sample:
 
 ```powershell
@@ -312,6 +357,15 @@ python -m factorio_ai.cli record-token-usage --tokens-used 35462230 --label "par
 ```
 
 Result: appended a final `delta_tokens=20480` row to `logs/token_usage.jsonl`; combined Part 68 rows total `229780` tokens and are read by the web dashboard token graph.
+
+Part 69 token usage sample:
+
+```powershell
+$env:PYTHONPATH='src'
+python -m factorio_ai.cli record-token-usage --tokens-used 35642300 --label "part69 placement search"
+```
+
+Result: appended `delta_tokens=180070` to `logs/token_usage.jsonl`, which is read by the web dashboard token graph.
 
 ## Live Smoke Checks Already Run
 
@@ -350,6 +404,22 @@ Result:
 - HTTP response contained `green-circuit-3-cable-2-circuit-cell`.
 - HTTP response contained the site-gate/pre-build text.
 - The in-app Browser plugin was attempted, but no `iab` browser was available (`agent.browsers` returned an empty list), so no browser screenshot was captured.
+
+Part 69 dashboard HTTP smoke:
+
+```powershell
+$env:PYTHONPATH='src'
+python -m factorio_ai.cli web --host 127.0.0.1 --port 18891 --objective launch_rocket_program
+Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:18891/factorio?lang=en&objective=launch_rocket_program'
+```
+
+Result:
+
+- Local dashboard HTTP smoke ran on port `18891`; the validation process was stopped after the smoke.
+- HTTP response contained `Placement`.
+- HTTP response contained `green-circuit-3-cable-2-circuit-cell`.
+- HTTP response contained `anchor=`.
+- The in-app Browser plugin was attempted again, but no `iab` browser was available, so no browser screenshot was captured.
 
 ## Important Caveat: Blueprint Validation
 
@@ -391,12 +461,12 @@ This file can later be transformed into Qwen fine-tuning examples.
 
 ## Next Implementation Priority
 
-Part 68 makes sandbox-proven layouts non-build-ready until site checks pass. Next work should convert that gate into actionable placement/build planning:
+Part 69 makes sandbox-proven layouts search for a nearby physical anchor, but it still does not execute builds. Next work should convert blockers into actionable deterministic tasks and only then consider build execution:
 
-1. Pick or reserve a real candidate site for the green-circuit cell instead of anchoring directly on the current circuit-site centroid.
-2. Add a deterministic pre-build placement search that finds a nearby collision-free, resource-safe anchor with power and plate logistics within reach.
-3. Add or surface the exact missing build items and logistics blockers as build-item-mall / belt / power tasks.
-4. Consider exporting `logs/layout-validation-feedback.jsonl` and `site_prebuild_gate` rows into Qwen fine-tuning examples later.
+1. Convert `build_ready_blockers` into strategy hints or deterministic prerequisite tasks: build-item mall, power pole corridor, iron/copper belt link, or stock collection.
+2. Add a live observed-state inspection command or dashboard detail that prints the selected `site_placement_search.selected_anchor`, blockers, and top candidate anchors for operators.
+3. Add a deterministic build executor only after sandbox pass, `site_prebuild_gate.status=pass`, `site_placement_search.status=found`, and required build items are available.
+4. Consider exporting `logs/layout-validation-feedback.jsonl`, `site_prebuild_gate`, and `site_placement_search` rows into Qwen fine-tuning examples later.
 5. Rerun before any future build-ready claim:
 
 ```powershell
@@ -493,7 +563,7 @@ Dashboard should include:
 - LLM decision logs.
 - Codex token usage graph with true time-axis spacing and KST timestamps.
 - Layout issues, opportunities, simulation candidates, and before/after blueprint copy buttons.
-- Candidate validation status and later sandbox validation results.
+- Candidate validation status, sandbox validation results, site pre-build gate, placement search status, and build-ready blockers.
 
 ## Git Hygiene
 

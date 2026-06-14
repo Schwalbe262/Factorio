@@ -204,6 +204,19 @@ class WebDashboardTests(unittest.TestCase):
                                     }
                                 },
                             },
+                            "site_placement_search": {
+                                "status": "found",
+                                "summary": "found candidate build anchor at 10.0,8.0",
+                                "selected_anchor": {"x": 10.0, "y": 8.0},
+                                "evaluated_anchors": 113,
+                                "top_candidates": [
+                                    {
+                                        "anchor": {"x": 10.0, "y": 8.0},
+                                        "placement_ready": True,
+                                        "failed_checks": ["build_items"],
+                                    }
+                                ],
+                            },
                             "simulation": {
                                 "score": 88,
                                 "before": {"electronic_circuit_per_minute": 10},
@@ -342,6 +355,8 @@ class WebDashboardTests(unittest.TestCase):
         self.assertIn("expected output electronic-circuit", html)
         self.assertIn("sandbox-proven layout still needs site-specific build checks", html)
         self.assertIn("missing build items", html)
+        self.assertIn("found candidate build anchor", html)
+        self.assertIn("evaluated=113", html)
         self.assertIn("powered=5", html)
         self.assertIn("machines=5", html)
         self.assertIn("manual-copy-overlay", html)

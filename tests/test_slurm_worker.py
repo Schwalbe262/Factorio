@@ -207,6 +207,7 @@ class SlurmWorkerTests(unittest.TestCase):
             self.assertTrue(result["no_apply"])
             self.assertFalse(result["build_ready"])
             self.assertIn("site_prebuild_gate=fail", " ".join(result["risks"]))
+            self.assertIn("site_placement_search=blocked", " ".join(result["risks"]))
 
     def test_layout_payload_marks_codex_wait_context(self):
         compact = compact_layout_improvement_payload(
@@ -271,10 +272,14 @@ class SlurmWorkerTests(unittest.TestCase):
         self.assertEqual(candidate["site_prebuild_gate"]["status"], "fail")
         self.assertFalse(candidate["site_prebuild_gate"]["build_ready"])
         self.assertIn("build_items", candidate["site_prebuild_gate"]["checks"])
+        self.assertEqual(candidate["site_placement_search"]["status"], "blocked")
+        self.assertIn("selected_anchor", candidate["site_placement_search"])
+        self.assertIn("sandbox validation feedback must pass", candidate["build_ready_blockers"][0])
         self.assertIn("sandbox ticks prove output", candidate["sandbox_validation_lesson"])
         self.assertEqual(compact["layout_validation_feedback"]["entry_count"], 1)
         self.assertIn("sandbox_validation is fail", " ".join(compact["rules"]))
         self.assertIn("site_prebuild_gate is fail", " ".join(compact["rules"]))
+        self.assertIn("site_placement_search", " ".join(compact["rules"]))
 
 
 if __name__ == "__main__":

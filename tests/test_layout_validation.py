@@ -80,7 +80,41 @@ class LayoutValidationTests(unittest.TestCase):
         merged = merge_sandbox_validation_feedback(layout, summary)
         candidate = merged["simulation_candidates"][0]
         self.assertEqual(candidate["sandbox_validation"]["status"], "fail")
+        self.assertFalse(candidate["build_ready"])
+        self.assertIn("sandbox validation feedback must pass", candidate["build_ready_blockers"][0])
         self.assertIn("Do not mark green-circuit-3-cable-2-circuit-cell build-ready", candidate["sandbox_validation_lesson"])
+
+    def test_feedback_merge_marks_candidate_build_ready_only_after_site_and_sandbox_pass(self):
+        feedback = {
+            "latest_by_candidate": {
+                "green-circuit-3-cable-2-circuit-cell": {
+                    "timestamp": "2026-06-14T00:00:00+00:00",
+                    "sandbox_validation": {
+                        "status": "pass",
+                        "reasons": [],
+                        "warnings": [],
+                        "observed_outputs": {"electronic-circuit": 95},
+                        "ticks": 1200,
+                    },
+                    "lesson": "Sandbox produced expected electronic-circuit output.",
+                }
+            }
+        }
+        layout = {
+            "simulation_candidates": [
+                {
+                    "candidate_id": "green-circuit-3-cable-2-circuit-cell",
+                    "site_prebuild_gate": {"status": "pass", "build_ready": True, "errors": []},
+                    "site_placement_search": {"status": "found", "summary": "found candidate build anchor"},
+                    "build_ready": False,
+                },
+            ]
+        }
+
+        merged = merge_sandbox_validation_feedback(layout, feedback)
+        candidate = merged["simulation_candidates"][0]
+        self.assertTrue(candidate["build_ready"])
+        self.assertEqual(candidate["build_ready_blockers"], [])
 
 
 if __name__ == "__main__":

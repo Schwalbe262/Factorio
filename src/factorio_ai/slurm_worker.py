@@ -288,6 +288,7 @@ def compact_layout_improvement_payload(payload: dict[str, Any]) -> dict[str, Any
             "Treat candidate validation failures as training feedback: explain the exact inserter, belt, power, or collision reason and do not mark it build-ready.",
             "If sandbox_validation is fail, use its lesson and reasons in the next candidate design.",
             "Sandbox pass is not site-ready; if site_prebuild_gate is fail or build_ready is false, keep the candidate simulation-only.",
+            "Use site_placement_search to distinguish missing build items from a bad physical anchor.",
             "Flag belt-capacity risk when required item flow approaches or exceeds belt capacity.",
             "The output can be used later by a deterministic executor after explicit approval.",
         ],
@@ -337,6 +338,7 @@ def heuristic_layout_improvement(compact: dict[str, Any]) -> dict[str, Any]:
     validation = selected.get("validation") if isinstance(selected.get("validation"), dict) else {}
     sandbox_validation = selected.get("sandbox_validation") if isinstance(selected.get("sandbox_validation"), dict) else {}
     site_gate = selected.get("site_prebuild_gate") if isinstance(selected.get("site_prebuild_gate"), dict) else {}
+    placement_search = selected.get("site_placement_search") if isinstance(selected.get("site_placement_search"), dict) else {}
     validation_errors = validation.get("errors") if isinstance(validation.get("errors"), list) else []
     validation_warnings = validation.get("warnings") if isinstance(validation.get("warnings"), list) else []
     validation_status = str(validation.get("status") or "")
@@ -345,6 +347,8 @@ def heuristic_layout_improvement(compact: dict[str, Any]) -> dict[str, Any]:
     site_gate_status = str(site_gate.get("status") or "")
     site_gate_errors = site_gate.get("errors") if isinstance(site_gate.get("errors"), list) else []
     site_gate_warnings = site_gate.get("warnings") if isinstance(site_gate.get("warnings"), list) else []
+    placement_status = str(placement_search.get("status") or "")
+    build_ready_blockers = selected.get("build_ready_blockers") if isinstance(selected.get("build_ready_blockers"), list) else []
     risks = ["Static simulation only; exact tiles, belts, inserters, power, and collisions are not validated here."]
     if validation_status:
         risks.append(f"static_validation={validation_status}")
@@ -352,9 +356,12 @@ def heuristic_layout_improvement(compact: dict[str, Any]) -> dict[str, Any]:
         risks.append(f"sandbox_validation={sandbox_status}")
     if site_gate_status:
         risks.append(f"site_prebuild_gate={site_gate_status}")
+    if placement_status:
+        risks.append(f"site_placement_search={placement_status}")
     risks.extend(str(item) for item in (validation_errors or validation_warnings)[:4])
     risks.extend(str(item) for item in sandbox_reasons[:4])
     risks.extend(str(item) for item in (site_gate_errors or site_gate_warnings)[:4])
+    risks.extend(str(item) for item in build_ready_blockers[:4])
     return {
         "selected_candidate_id": selected.get("candidate_id"),
         "score": _int_value(simulation.get("score"), 50),
@@ -386,6 +393,11 @@ def _apply_layout_candidate_gate(result: dict[str, Any], compact: dict[str, Any]
     risks = _string_list(output.get("risks"))
     if selected.get("build_ready") is False:
         output["build_ready"] = False
+        selected_blockers = selected.get("build_ready_blockers") if isinstance(selected.get("build_ready_blockers"), list) else []
+        for blocker in selected_blockers:
+            blocker_text = str(blocker)
+            if blocker_text and blocker_text not in risks:
+                risks.append(blocker_text)
     site_gate = selected.get("site_prebuild_gate") if isinstance(selected.get("site_prebuild_gate"), dict) else {}
     if site_gate:
         status = str(site_gate.get("status") or "")
@@ -987,6 +999,7 @@ def _compact_layout_candidate(value: dict[str, Any]) -> dict[str, Any]:
     validation = value.get("validation") if isinstance(value.get("validation"), dict) else {}
     sandbox_validation = value.get("sandbox_validation") if isinstance(value.get("sandbox_validation"), dict) else {}
     site_gate = value.get("site_prebuild_gate") if isinstance(value.get("site_prebuild_gate"), dict) else {}
+    placement_search = value.get("site_placement_search") if isinstance(value.get("site_placement_search"), dict) else {}
     return {
         "candidate_id": _compact_value(value.get("candidate_id"), string_limit=90),
         "simulation_only": bool(value.get("simulation_only")),
@@ -995,6 +1008,7 @@ def _compact_layout_candidate(value: dict[str, Any]) -> dict[str, Any]:
         "requires_build_command": bool(value.get("requires_build_command")),
         "requires_site_prebuild_gate": bool(value.get("requires_site_prebuild_gate")),
         "build_ready": bool(value.get("build_ready")),
+        "build_ready_blockers": _compact_value(value.get("build_ready_blockers"), string_limit=140, list_limit=5),
         "validation": {
             "status": validation.get("status"),
             "checked_machines": validation.get("checked_machines"),
@@ -1027,6 +1041,7 @@ def _compact_layout_candidate(value: dict[str, Any]) -> dict[str, Any]:
         }
         if site_gate
         else {},
+        "site_placement_search": _compact_site_placement_search(placement_search) if placement_search else {},
         "sandbox_validation_lesson": _compact_value(value.get("sandbox_validation_lesson"), string_limit=180),
         "sandbox_lesson": _compact_value(value.get("sandbox_validation_lesson"), string_limit=180),
         "simulation": {
@@ -1050,6 +1065,18 @@ def _compact_site_gate_checks(value: Any) -> dict[str, Any]:
             "summary": _compact_value(check.get("summary"), string_limit=120),
         }
     return output
+
+
+def _compact_site_placement_search(value: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "status": value.get("status"),
+        "summary": _compact_value(value.get("summary"), string_limit=140),
+        "seed_anchor": _compact_position(value.get("seed_anchor")),
+        "selected_anchor": _compact_position(value.get("selected_anchor")),
+        "selected_score": value.get("selected_score"),
+        "evaluated_anchors": value.get("evaluated_anchors"),
+        "top_candidates": _compact_value(value.get("top_candidates"), string_limit=120, list_limit=4),
+    }
 
 
 def _monitor_layout_issue(
